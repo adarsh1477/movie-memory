@@ -14,11 +14,44 @@ app/layout.tsx (RootLayout)
         └── <ErrorBoundary> wrapping the card body with a retry CTA
 ```
 
-The `onboarding` segment composes `OnboardingForm` (client — Save button, Zod-mirrored validation hints). Landing (`/`) is a server component that calls `auth()` and renders either `SignInButton` or `redirect()`. `MovieHeroCard` contains `PosterImage` (client — renders `next/image` from `posterPath`, or a gradient film-frame fallback when the path is null).
+The `onboarding` segment composes `OnboardingForm` (client — Save button, Zod-mirrored validation hints). Landing (`/`) is a server component that calls `auth()` and, for authenticated users, `redirect()`s before the page paints; for unauthenticated users it renders a full-page premium landing composed of:
+
+```
+app/page.tsx (server — auth(), getTrendingPosters())
+├── PosterBackground (server — 3 marquee rows, TMDB trending posters, 4-layer overlay)
+├── header: Logo + SignInButton (nav variant)
+├── section 1: Hero — headline + SignInButton (CTA) | MockCardPreview (client)
+├── section 2: How it works — HowStep × 3, ScrollFade (client)
+├── section 3: See it in action — FactCarousel (client), ScrollFade
+├── section 4: Built with care — FeatureCard × 4, ScrollFade
+├── section 5: Final CTA — SignInButton, ScrollFade
+└── footer: Logo + TMDB credit (shown only when posters.length > 0)
+```
+
+`MovieHeroCard` contains `PosterImage` (client — renders `next/image` from `posterPath`, or a gradient film-frame fallback when the path is null).
 
 ## Request flows (as boxes + arrows for a diagram)
 
-### A. Login (first-time user)
+### A. Landing page poster wall
+
+```
+Browser ──GET /──▶ app/page.tsx
+  │                   ├── auth() → has session → redirect(/dashboard or /onboarding)
+  │                   └── getTrendingPosters()
+  │                         ├── TMDB_API_KEY absent → [] immediately (no fetch)
+  │                         └── fetch("https://api.themoviedb.org/3/trending/movie/day", {
+  │                               headers: { Authorization: "Bearer <TMDB_API_KEY>" },
+  │                               next: { revalidate: 86400 },   // 24 h Next.js data cache
+  │                               signal: AbortSignal.timeout(3000)
+  │                             })
+  │                               ├── ok → Zod parse → filter null poster_path → string[]
+  │                               └── any failure (network, non-OK, timeout, bad shape) → []
+  │
+  └── render PosterBackground (server, no hydration) + 5 landing sections
+      posters.length < 4 → PosterBackground renders nothing; page still loads normally
+```
+
+### B. Login (first-time user)
 
 ```
 Browser ──GET /──▶ app/page.tsx ──auth()──▶ Auth.js
@@ -113,13 +146,16 @@ Every branch logs a `fact.*` event with `durationMs`. Response always sent with 
 
 ## Server-only vs client-only boundaries
 
-- Server-only: `lib/env.ts`, `lib/prisma.ts`, `lib/openai.ts`, `lib/tmdb.ts`, `lib/fact-service.ts`, `lib/lock.ts`, `lib/rate-limit.ts`, `lib/logger.ts`, `lib/auth.ts`, all route handlers, all `page.tsx` by default. `TMDB_API_KEY` never appears in any `NEXT_PUBLIC_*` var or client bundle.
+- Server-only: `lib/env.ts`, `lib/prisma.ts`, `lib/openai.ts`, `lib/tmdb.ts`, `lib/fact-service.ts`, `lib/lock.ts`, `lib/rate-limit.ts`, `lib/logger.ts`, `lib/auth.ts`, all route handlers, all `page.tsx` by default, `components/PosterBackground.tsx` (server component — fetches and renders TMDB poster paths without exposing them to the client bundle). `TMDB_API_KEY` never appears in any `NEXT_PUBLIC_*` var or client bundle.
 - Client-only: `components/MovieHeroCard.tsx` (inline edit), `components/PosterImage.tsx` (renders stored path via `next/image`), `components/FactCard.tsx` (hook), `components/SignInButton.tsx`, `components/SignOutButton.tsx`, `lib/api.ts`, `lib/client-cache.ts`.
 - `lib/validation.ts` and `lib/errors.ts` are shared — no server-only imports, so they're safe on both sides.
 
 ## Image hosting
 
-TMDB poster paths are relative (e.g. `/abc123.jpg`). The full URL is assembled as `https://image.tmdb.org/t/p/w500{posterPath}`. `next.config.ts` must include `images.remotePatterns` with `hostname: 'image.tmdb.org'` so `next/image` is permitted to serve them. The posterPath is stored once at save/edit time — `PosterImage` only does URL construction, not API calls.
+TMDB poster paths are relative (e.g. `/abc123.jpg`). `next.config.ts` includes `images.remotePatterns` with `hostname: 'image.tmdb.org'` for all TMDB images.
+
+- **Landing page poster wall** (`PosterBackground`): uses `posterUrl(path, 'w342')` — the smaller `w342` size is sufficient for marquee thumbnails and costs less bandwidth. Paths are fetched on each server render (cached 24 h by Next.js), never stored in the database.
+- **Dashboard hero card** (`PosterImage`): assembles `https://image.tmdb.org/t/p/w500{posterPath}` for the larger dashboard display. `posterPath` is stored once in `Movie.posterPath` at save/edit time (Stage 6) — `PosterImage` only does URL construction, not API calls.
 
 ## Proxy (UX only)
 

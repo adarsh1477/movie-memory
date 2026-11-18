@@ -65,11 +65,11 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 3. **Data model + onboarding** — Prisma schema, migration, `/onboarding` server action with Zod
 4. **Dashboard shell** — layout, Sidebar/TopBar, Avatar with initials, MovieHeroCard with poster slot (`PosterImage` — `next/image` from stored path, or gradient film-frame fallback; read-only first), FactCard skeleton, `app/dashboard/error.tsx` + `app/global-error.tsx`
 5. **Fact service (Base)** — `lib/fact-service.ts` with generate-on-request + DB persist, structured log events wired
-6. **Variant A upgrade + TMDB poster** — layer 60s cache check + blocking advisory lock + OpenAI fallback + per-user rate limit into the same service; add `lib/tmdb.ts` (TMDB search endpoint, Bearer token, 3s timeout, graceful fallback); call `fetchPosterPath(title)` inside the onboarding and movie-edit server actions, write result into `Movie.posterPath`
+6. **Variant A upgrade + TMDB dashboard poster** — layer 60s cache check + blocking advisory lock + OpenAI fallback + per-user rate limit into the same service; extend `lib/tmdb.ts` with `fetchPosterPath(title)` (TMDB `/search/movie` endpoint, same `TMDB_API_KEY` Bearer token, 3s `AbortSignal.timeout`, returns `null` on any failure); call `fetchPosterPath` inside the onboarding and movie-edit server actions, write result into `Movie.posterPath`; note: `lib/tmdb.ts` is already created (with `getTrendingPosters()` and `posterUrl()`) from Stage 10 — Stage 6 only adds the search function
 7. **Typed API layer (Variant B)** — `/api/me`, `/api/me/movie`, `/api/fact` with shared Zod schemas and `lib/api.ts` client, `Cache-Control: no-store` on all authed responses
 8. **Inline edit + client cache (Variant B)** — optimistic edit, 30s in-memory client cache, countdown, FactCard error boundary with retry
 9. **Tests + CI** — Vitest suites + `.github/workflows/ci.yml` (typecheck + lint + tests + Postgres service for lock test)
-10. **Polish + README** — states, focus rings, docs, screenshots, AI-usage note
+10. **Polish + README** — states, focus rings, docs, screenshots, AI-usage note; premium landing page: animated TMDB trending poster wall (`PosterBackground` — 3 marquee rows, `clamp(120px, 11vw, 210px)` poster height, 4-layer overlay, `getTrendingPosters()` with 24 h revalidate), multi-section layout with `ScrollFade` scroll animations, `FactCarousel` (swipe/keyboard/arrow nav), `MockCardPreview`; "Data from TMDB" footer credit on the landing page (conditional on poster data)
 
 ## Key design decisions
 
@@ -106,7 +106,7 @@ The 60s cache lookup is "latest fact for this user **and this movie title**." If
 - `movie-edit.test.tsx` — RTL: click edit → type → Save; assert optimistic UI change before the mock resolves; make the mock reject → assert revert to previous title and error toast.
 - `rate-limit.test.ts` — 31st request within 60s returns 429 with `retryAfterMs`; after clock advance beyond window, allowed again.
 - `env.test.ts` — missing `OPENAI_API_KEY` → import of `lib/env.ts` throws with a readable message naming the missing key.
-- `tmdb.test.ts` — (a) TMDB returns a result → `fetchPosterPath` returns the poster path string; (b) TMDB returns empty results array → returns `null`; (c) `fetch` rejects (network error) → returns `null`; (d) `fetch` takes longer than 3s timeout → returns `null`. All four cases use `vi.stubGlobal('fetch', ...)` or mock `AbortSignal.timeout`; none hit the real TMDB API.
+- `tmdb.test.ts` — covers `getTrendingPosters` (the landing page wall function): (a) successful response with mixed null/non-null `poster_path` → returns only the non-null strings; (b) unexpected response shape (missing `results` key) → returns `[]`; (c) `fetch` rejects (network error) → returns `[]`; (d) `TMDB_API_KEY` absent → returns `[]` and `fetch` is never called; (e) non-OK HTTP status (500) → returns `[]`. All cases use `vi.stubGlobal('fetch', ...)`; none hit the real TMDB API. Future: add parallel cases for `fetchPosterPath` (Stage 6 dashboard poster).
 
 **`vitest.setup.ts`** sets dummy values for every required env var (`DATABASE_URL=postgres://test`, `AUTH_SECRET=test`, `GOOGLE_CLIENT_ID=test`, `GOOGLE_CLIENT_SECRET=test`, `OPENAI_API_KEY=test`, `NODE_ENV=test`) before any test module is imported, so `lib/env.ts` doesn't throw during normal test runs. `env.test.ts` is the one suite that deliberately deletes a key via `vi.resetModules()` + `delete process.env.X` and re-imports to prove the startup check works.
 
@@ -222,12 +222,16 @@ components/
   PosterImage.tsx              // next/image from posterPath or gradient film-frame fallback
   FactCard.tsx                 // countdown + New fact
   Skeleton.tsx  SignInButton.tsx
+  PosterBackground.tsx         // server — landing page 3-row marquee poster wall
+  ScrollFade.tsx               // client — IntersectionObserver fade-in wrapper
+  FactCarousel.tsx             // client — landing page sample fact carousel
+  MockCardPreview.tsx          // client — landing page animated dashboard preview
 lib/
   env.ts                       // Zod-validated process.env, throws at import; TMDB_API_KEY optional
   auth.ts                      // Auth.js v5 config, auth() export
   prisma.ts                    // singleton
   openai.ts                    // client + 8s AbortSignal + retry-on-429/5xx
-  tmdb.ts                      // fetchPosterPath(title): server-only TMDB search, 3s timeout, graceful null
+  tmdb.ts                      // getTrendingPosters(): landing wall, Bearer token, 24 h revalidate, returns []; posterUrl(path, size): URL helper; fetchPosterPath(title): dashboard search, returns null (Stage 6)
   fact-service.ts              // cache check + lock + generate + fallback + logs
   lock.ts                      // blocking pg_advisory_xact_lock + in-mem fallback
   rate-limit.ts                // per-user sliding window (in-mem; swap for Redis)

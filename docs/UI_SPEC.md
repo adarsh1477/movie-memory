@@ -35,7 +35,23 @@ Contrast: `text` on `background` = 16.6:1; `text-muted` on `background` = 7.8:1;
 
 ### `/` (landing)
 
-Centered column. Product name, one-line description, `SignInButton`. No footer. Rendered server-side; already-authed users are `redirect()`ed before the page paints.
+Rendered server-side. Authed users are `redirect()`ed before the page paints. Unauthenticated users see a full-page premium landing.
+
+**Background — `PosterBackground` (server component):** Three horizontal marquee rows of TMDB trending posters. Poster height: `clamp(120px, 11vw, 210px)`; width auto via `aspect-ratio: 2/3`. Rows 0 and 2 scroll left, row 1 scrolls right. Overlay stack: (1) 70 % dark base, (2) radial vignette (darkens edges), (3) soft left gradient on `lg+` (behind the headline column only), (4) top/bottom fades (`h-40`). Third row hidden on mobile. `prefers-reduced-motion`: marquee does not play. `< 4` poster paths → no background renders.
+
+**Sticky nav:** Logo + `SignInButton` (nav variant). `bg-background/90 backdrop-blur-sm`, `h-16`, `z-30`.
+
+**Section 1 — Hero:** Two-column on `lg+`. Left: animated eyebrow badge, `h1` headline, subtitle (`text-lg text-text-muted`), CTA `SignInButton` + "Free. Takes 10 seconds." caption; `motion-safe:animate-fade-up` with staggered `animationDelay`. Right: `MockCardPreview` (client — animated card with cycling fact text). Desktop: amber radial gradient behind the right column; left-column gradient darkens the poster wall for readability.
+
+**Section 2 — How it works:** Three `HowStep` items (icon + title + body). `ScrollFade`.
+
+**Section 3 — See it in action:** `FactCarousel` with an amber radial glow wrapper. `bg-surface/30` tint. `ScrollFade`.
+
+**Section 4 — Built with care:** Four `FeatureCard` tiles in a `2 → 4` column responsive grid. `ScrollFade`.
+
+**Section 5 — Final CTA:** Accent glow, repeated headline, `SignInButton`. `ScrollFade`.
+
+**Footer:** Logo + "Movie data from TMDB" (linked to `https://www.themoviedb.org/`, `target="_blank" rel="noopener noreferrer"`; rendered only when `posters.length > 0` so a missing key or TMDB outage shows no broken credit) + "Built as a take-home project." `text-xs text-text-muted`.
 
 ### `/onboarding`
 
@@ -46,6 +62,22 @@ Centered card (`max-w-md`). Heading "What's your favorite movie?", single text i
 Two-column on `md+`: left `Sidebar` (fixed, ~240px), right content stack (`MovieHeroCard` then `FactCard`, both `rounded-2xl`, spaced by `gap-6`). On `< md` the sidebar collapses into a `TopBar` with avatar + name and a menu toggle for sign-out.
 
 ## Components
+
+### `PosterBackground`
+
+Props: `{ posters: string[] }`. Server component — no `'use client'`, no client JS. Returns `null` when `posters.length < 4`. Builds a 40-item tile (base list repeated to reach ≥ 40) and lays out 3 copies per row so `translateX(-33.333%)` = exactly one tile, seamless at any viewport width up to 3840 px. `fixed inset-0 -z-20 overflow-hidden`.
+
+### `ScrollFade`
+
+Props: `{ children, className?, delay? }`. Client component. Three-phase state machine (`"pre"` / `"hidden"` / `"visible"`) so SSR renders content visible — no flash on first paint. IntersectionObserver (threshold 0.1) fires once on first entry and disconnects. `prefers-reduced-motion`: skips animation, renders content visible immediately via `setTimeout(..., 0)` (avoids `react-hooks/set-state-in-effect`).
+
+### `FactCarousel`
+
+Client component. Standalone `FACTS` const (no props). Prev/next arrow buttons positioned `absolute left-2` / `right-2` within the card; card content padded `px-14` to clear them (44 px tap targets). Swipe/drag via pointer events (`onPointerDown/Move/Up`): 8 px threshold to detect intent, 40 px to commit navigation. `transitioningRef` guards against overlapping transitions on rapid clicks. Auto-advance interval resets on `paused` or `reducedMotion` changes. `aria-live="polite" aria-atomic="true"` on fact text.
+
+### `MockCardPreview`
+
+Client component on the landing hero right column. Renders an animated preview of the dashboard card (title, movie, cycling fact text). Purely presentational; no real data or API calls.
 
 ### `Sidebar` / `TopBar`
 
@@ -110,7 +142,9 @@ States:
 
 ## Footer
 
-Every authenticated page includes a minimal footer with the text "Movie data from TMDB" linking to `https://www.themoviedb.org/` (opens in new tab, `rel="noopener noreferrer"`). Styled `text-xs text-text-muted`; uses the TMDB wordmark only if licensing permits, otherwise plain text.
+**Landing page:** Logo + "Movie data from TMDB" (linked, `target="_blank" rel="noopener noreferrer"`; omitted entirely when `posters.length === 0`) + "Built as a take-home project." `text-xs text-text-muted`. Plain text — no TMDB wordmark required for poster attribution.
+
+**Authenticated pages:** Minimal footer with "Movie data from TMDB" link. `text-xs text-text-muted`.
 
 ## Accessibility
 

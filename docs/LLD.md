@@ -24,12 +24,16 @@ components/
   FactCard.tsx                   useFact() hook, skeleton, countdown, retry
   SignInButton.tsx  SignOutButton.tsx
   Skeleton.tsx                   Shared shimmer primitive
+  PosterBackground.tsx           Server component; landing page 3-row marquee poster wall
+  ScrollFade.tsx                 IntersectionObserver fade-in wrapper (client); 3-phase SSR-safe state
+  FactCarousel.tsx               Landing page sample fact carousel; arrow/swipe/keyboard/dot nav
+  MockCardPreview.tsx            Landing page animated dashboard preview card (client)
 lib/
   env.ts                         Zod-validated process.env, throws at import; TMDB_API_KEY optional
   auth.ts                        Auth.js v5 config + auth() + handlers export
   prisma.ts                      PrismaClient singleton (globalThis in dev)
   openai.ts                      generateFact(movie, avoid[], signal)
-  tmdb.ts                        fetchPosterPath(title): server-only TMDB search, 3s timeout, returns null on any failure
+  tmdb.ts                        getTrendingPosters(): landing page poster wall, Bearer token, 24 h revalidate, returns [] on any failure; posterUrl(path, size): URL helper for both uses; fetchPosterPath(title): dashboard poster search, 3s timeout, returns null on any failure (Stage 6)
   fact-service.ts                getFactForUser(userId) — the main service
   lock.ts                        withAdvisoryLock(tx, key, fn)
   rate-limit.ts                  consume(userId): { ok, retryAfterMs }
@@ -50,7 +54,7 @@ tests/
   env.test.ts
   api-client.test.ts
   movie-edit.test.tsx
-  tmdb.test.ts                   TMDB success, no result, fetch failure, timeout fallback
+  tmdb.test.ts                   getTrendingPosters: success path, missing 'results' key → [], fetch throws → [], absent TMDB_API_KEY → [] (fetch never called), non-OK HTTP status → []
 proxy.ts                         Cookie-presence redirect only
 vitest.setup.ts                  Dummy env vars for test imports
 eslint.config.js                 ESLint 9 flat config
@@ -87,9 +91,20 @@ export async function generateFact(
 ): Promise<string>            // throws OpenAiError on retry-exhausted failure
 
 // lib/tmdb.ts
+export const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p"
+
+export function posterUrl(
+  path: string,
+  size?: "w342" | "w500" | "original",   // default "w342"
+): string
+
+export async function getTrendingPosters(): Promise<string[]>
+// Returns trending poster paths. TMDB_API_KEY absent or any error → [].
+// Uses next: { revalidate: 86400 } and AbortSignal.timeout(3000).
+
 export async function fetchPosterPath(
   title: string,
-): Promise<string | null>    // null on no match, fetch error, timeout, or absent TMDB_API_KEY
+): Promise<string | null>    // Stage 6: null on no match, fetch error, timeout, or absent TMDB_API_KEY
 
 // lib/lock.ts
 export async function withAdvisoryLock<T>(
@@ -182,7 +197,7 @@ All authed responses: `Cache-Control: no-store`.
 - `lib/auth.ts` — Auth.js v5 config with Google provider + Prisma adapter + DB sessions; exports `auth`, `handlers`, `signIn`, `signOut`.
 - `lib/prisma.ts` — single `PrismaClient` across hot reloads.
 - `lib/openai.ts` — one function: `generateFact(movie, avoid, signal)`. Retries once on 429/5xx. No business logic.
-- `lib/tmdb.ts` — one function: `fetchPosterPath(title)`. Calls TMDB `/search/movie` with the Read Access Token as a Bearer header. `AbortSignal.timeout(3000)`. Returns the first result's `poster_path` or `null` on any failure. Never throws.
+- `lib/tmdb.ts` — three exports. `posterUrl(path, size)`: assembles `https://image.tmdb.org/t/p/{size}{path}`. `getTrendingPosters()`: calls TMDB `/trending/movie/day` with the Read Access Token as a Bearer header, `next: { revalidate: 86400 }`, `AbortSignal.timeout(3000)`; returns `string[]` of poster paths, `[]` on any failure, never throws. `fetchPosterPath(title)` (Stage 6): calls `/search/movie`, same auth/timeout pattern, returns first result's `poster_path` or `null` on any failure, never throws.
 - `lib/lock.ts` — `withAdvisoryLock(tx, key, fn)`: sets `lock_timeout`, calls `pg_advisory_xact_lock`, runs `fn`, maps `55P03` → `LockTimeoutError`.
 - `lib/rate-limit.ts` — in-memory sliding window; pure function with injectable `now`.
 - `lib/logger.ts` — `pino` with `redact: ['email', 'user.email']`; `log.child({ event, userId, movieTitle, durationMs })`.

@@ -80,6 +80,18 @@
 - **Why:** Fetching on load would add TMDB latency to every dashboard render and re-fetch the same result each time. Storing it once on write is cheaper, more reliable, and aligns with how the title itself is stored. If TMDB changes the poster, the user can re-save to pick up the new path (or we add a background refresh later).
 - **Considered:** Fetching on every dashboard render (always fresh but always costly). Also considered a background job after save (more moving parts for the same result). Both rejected in favour of the simpler synchronous save path.
 
+### Landing page TMDB trending poster wall
+
+- **Decision:** Fetch TMDB trending movie posters (`/trending/movie/day`) with a 24 h Next.js `revalidate: 86400`, display them as an animated 3-row marquee background on the landing page, and credit TMDB in the footer (omitted if `posters.length === 0`).
+- **Why:** Trending posters change slowly (daily at most), so a 24 h cache keeps the wall fresh without burning API quota on every cold load. The trending endpoint returns a curated set of high-quality posters with no title lookup — a single call populates the entire background. Failures return `[]` so the page renders normally without posters; the footer credit is conditional on poster data being present.
+- **Considered:** A static curated set of local images (no key required, never updates). Per-request fetch with `no-store` (always fresh, adds latency to cold load, depletes free quota faster). Chose 24 h revalidate as the minimum-cost option that still keeps the wall feeling current.
+
+### Landing page poster wall: `clamp` sizing and 3-copy track for seamless coverage
+
+- **Decision:** Poster height is `clamp(120px, 11vw, 210px)` with `aspect-ratio: 2/3`; each row builds a 40-item tile (the ~20-result TMDB list repeated ×2) and uses three copies of that tile, animating with `translateX(-33.333%)` to advance exactly one tile per loop.
+- **Why:** `clamp` ties poster size to the viewport — roughly 150 px at 1366 px and capped at 210 px from 1920 px onward — without media-query breakpoints. A 40-item tile at the smallest poster slot width (100 px + 12 px gap = 112 px) produces 4480 px of content, exceeding the widest supported viewport (3840 px) so there is never a visible seam at any size. Translating by one-third of a 3-copy track is the simplest integer fraction that guarantees one tile ≥ viewport.
+- **Considered:** Fixed pixel widths (fine on the design viewport, break at higher resolutions). A 2-copy track (`−50 %`) — works until one copy is narrower than the viewport; with the default 20 TMDB results this fails at 2560 px and above at the original fixed poster size.
+
 ### Gradient film-frame as poster fallback, not a placeholder image
 
 - **Decision:** When `posterPath` is null, `PosterImage` renders a CSS gradient div with an `IconFilm` icon — same outer dimensions as the poster slot, no image request.
