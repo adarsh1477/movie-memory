@@ -43,11 +43,16 @@ const config: Config = {
           from: { transform: "translateX(-33.333%)" },
           to: { transform: "translateX(0)" },
         },
+        shimmer: {
+          "0%": { backgroundPosition: "200% 0" },
+          "100%": { backgroundPosition: "-200% 0" },
+        },
       },
       animation: {
         "fade-up": "fade-up 0.55s ease-out both",
         marquee: "marquee 40s linear infinite",
         "marquee-reverse": "marquee-reverse 48s linear infinite",
+        shimmer: "shimmer 1.8s ease-in-out infinite",
       },
     },
   },
