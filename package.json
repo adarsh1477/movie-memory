@@ -12,15 +12,16 @@
   },
   "dependencies": {
     "@auth/prisma-adapter": "2.11.3",
+    "@prisma/client": "^5.22.0",
     "next": "16.4.6",
     "next-auth": "5.0.0-beta.32",
+    "openai": "^7.58.0",
     "pino": "^9.0.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {
-    "@prisma/client": "^5.22.0",
     "@testing-library/jest-dom": "^6.4.0",
     "@testing-library/react": "^16.0.0",
     "@types/node": "^20",
