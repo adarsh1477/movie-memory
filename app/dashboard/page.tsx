@@ -88,7 +88,8 @@ export default async function DashboardPage() {
   if (!user?.movie) redirect("/onboarding");
 
   const { movie } = user;
-  const displayTitle = toTitleCase(movie.title);
+  // TMDB titles are canonical ("WALL·E", "M3GAN"); only tidy up free-text ones.
+  const displayTitle = movie.tmdbId ? movie.title : toTitleCase(movie.title);
 
   const userProps = {
     name: user.name,
@@ -207,6 +208,11 @@ export default async function DashboardPage() {
                   <div className="mt-2 flex items-start gap-3">
                     <h1 className="flex-1 text-3xl font-semibold leading-tight text-text sm:text-4xl lg:text-[2.75rem] lg:leading-[1.12]">
                       {displayTitle}
+                      {movie.year && (
+                        <span className="ml-3 align-middle text-lg font-normal tabular-nums text-text-muted sm:text-xl">
+                          {movie.year}
+                        </span>
+                      )}
                     </h1>
                     {/* Edit button — wired in Stage 8 */}
                     <button

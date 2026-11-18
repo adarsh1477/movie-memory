@@ -62,6 +62,8 @@ model Movie {
   id         String   @id @default(cuid())
   userId     String   @unique
   title      String
+  tmdbId     Int?
+  year       Int?
   posterPath String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt

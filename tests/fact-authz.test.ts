@@ -62,7 +62,7 @@ describe.skipIf(skipPg)("fact authorization (real Postgres)", () => {
 
     await getFactForUser(userA.id, deps);
 
-    expect(openai).toHaveBeenCalledWith("Heat", ["A one"], expect.any(AbortSignal));
+    expect(openai).toHaveBeenCalledWith({ title: "Heat", year: null }, ["A one"], expect.any(AbortSignal));
   });
 
   it("falls back to A's own older fact, never B's newer one", async () => {

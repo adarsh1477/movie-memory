@@ -36,6 +36,10 @@ export const FACT_RATE_LIMIT = { limit: 30, windowMs: 60_000 } as const;
 
 export const factRateLimiter = createRateLimiter(FACT_RATE_LIMIT);
 
+// Same per-user policy, separate bucket: typing in the search box must not
+// use up the user's fact budget (and vice versa).
+export const movieSearchRateLimiter = createRateLimiter(FACT_RATE_LIMIT);
+
 export function consume(userId: string, now?: number): RateLimitResult {
   return factRateLimiter.consume(userId, now);
 }

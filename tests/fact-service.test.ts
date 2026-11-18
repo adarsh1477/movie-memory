@@ -11,6 +11,7 @@ import { AppErrorException, OpenAiError } from "@/lib/errors";
 type FakeDb = {
   facts: Fact[];
   movies: Map<string, string>;
+  years?: Map<string, number>;
   onLock?: () => void;
   lockError?: unknown;
 };
@@ -26,7 +27,7 @@ function fakePrisma(db: FakeDb) {
     movie: {
       findUnique: async ({ where }: { where: { userId: string } }) => {
         const title = db.movies.get(where.userId);
-        return title ? { title } : null;
+        return title ? { title, year: db.years?.get(where.userId) ?? null } : null;
       },
     },
     fact: {
@@ -67,7 +68,11 @@ let deps: FactServiceDeps;
 
 beforeEach(() => {
   now = T0;
-  db = { facts: [], movies: new Map([["userA", "Heat"], ["userB", "Heat"]]) };
+  db = {
+    facts: [],
+    movies: new Map([["userA", "Heat"], ["userB", "Heat"]]),
+    years: new Map([["userA", 1995]]),
+  };
   let n = 0;
   openai = vi.fn(async () => `fact #${++n}`);
   deps = {
@@ -131,7 +136,23 @@ describe("avoid list", () => {
 
     await getFactForUser("userA", deps);
 
-    expect(openai).toHaveBeenCalledWith("Heat", ["A heat 5", "A heat 4", "A heat 3"], expect.any(AbortSignal));
+    expect(openai).toHaveBeenCalledWith(
+      { title: "Heat", year: 1995 },
+      ["A heat 5", "A heat 4", "A heat 3"],
+      expect.any(AbortSignal),
+    );
+  });
+});
+
+describe("movie year", () => {
+  it("passes the stored year to OpenAI", async () => {
+    await getFactForUser("userA", deps);
+    expect(openai.mock.calls[0][0]).toEqual({ title: "Heat", year: 1995 });
+  });
+
+  it("passes year: null for a free-text movie", async () => {
+    await getFactForUser("userB", deps);
+    expect(openai.mock.calls[0][0]).toEqual({ title: "Heat", year: null });
   });
 });
 

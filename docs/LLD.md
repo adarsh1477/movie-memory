@@ -33,7 +33,10 @@ lib/
   auth.ts                        Auth.js v5 config + auth() + handlers export
   prisma.ts                      PrismaClient singleton (globalThis in dev)
   openai.ts                      generateFact(movie, avoid[], signal)
-  tmdb.ts                        getTrendingPosters(): landing page poster wall, Bearer token, 24 h revalidate, returns [] on any failure; posterUrl(path, size): URL helper for both uses; fetchPosterPath(title): dashboard poster search, 3s timeout, returns null on any failure (Stage 6)
+  tmdb.ts                        Server-only. getTrendingPosters(): landing wall, 24 h revalidate, [] on failure; searchMovies(q): ≤6 results, 3s timeout, { results, degraded }, never throws
+  tmdb-image.ts                  Client-safe posterUrl(path, size)
+  movie-search-client.ts         Browser fetch for /api/movies/search, Zod-validated
+  http.ts                        jsonOk / jsonError envelopes, Cache-Control: no-store
   fact-service.ts                getFactForUser(userId) — the main service
   lock.ts                        withAdvisoryLock(tx, key, fn)
   rate-limit.ts                  consume(userId): { ok, retryAfterMs }
@@ -85,10 +88,10 @@ export const systemClock: Clock
 
 // lib/openai.ts
 export async function generateFact(
-  movie: string,
+  movie: { title: string; year: number | null },
   avoid: string[],
   signal: AbortSignal,
-): Promise<string>            // throws OpenAiError on retry-exhausted failure
+): Promise<string>            // throws OpenAiError on failure or empty reply
 
 // lib/tmdb.ts
 export const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p"
@@ -102,9 +105,11 @@ export async function getTrendingPosters(): Promise<string[]>
 // Returns trending poster paths. TMDB_API_KEY absent or any error → [].
 // Uses next: { revalidate: 86400 } and AbortSignal.timeout(3000).
 
-export async function fetchPosterPath(
-  title: string,
-): Promise<string | null>    // Stage 6: null on no match, fetch error, timeout, or absent TMDB_API_KEY
+export async function searchMovies(
+  query: string,
+): Promise<{ results: MovieSearchResult[]; degraded: boolean }>
+// ≤6 results of { tmdbId, title, year, posterPath }. Missing key, timeout, HTTP
+// error or bad body → { results: [], degraded: true }. Bad items are skipped.
 
 // lib/lock.ts
 export async function withAdvisoryLock<T>(
@@ -188,6 +193,7 @@ export type Envelope<T> = { ok: true; data: T } | { ok: false; error: ApiError }
 | GET    | `/api/me`       | (none)                    | `Envelope<MeResponse>`                  | 401                                         |
 | PUT    | `/api/me/movie` | `MovieInput`              | `Envelope<MeResponse>`                  | 401, 400 (VALIDATION)                       |
 | GET    | `/api/fact`     | (none)                    | `Envelope<FactResponse>`                | 401, 400 (NO_MOVIE), 429, 502               |
+| GET    | `/api/movies/search` | `?q=` (trim, 2–100)  | `Envelope<MovieSearchResponse>` (`degraded: true` when TMDB fails) | 401, 400 (VALIDATION), 429 |
 
 All authed responses: `Cache-Control: no-store`.
 
@@ -197,7 +203,8 @@ All authed responses: `Cache-Control: no-store`.
 - `lib/auth.ts` — Auth.js v5 config with Google provider + Prisma adapter + DB sessions; exports `auth`, `handlers`, `signIn`, `signOut`.
 - `lib/prisma.ts` — single `PrismaClient` across hot reloads.
 - `lib/openai.ts` — one function: `generateFact(movie, avoid, signal)`. Retries once on 429/5xx. No business logic.
-- `lib/tmdb.ts` — three exports. `posterUrl(path, size)`: assembles `https://image.tmdb.org/t/p/{size}{path}`. `getTrendingPosters()`: calls TMDB `/trending/movie/day` with the Read Access Token as a Bearer header, `next: { revalidate: 86400 }`, `AbortSignal.timeout(3000)`; returns `string[]` of poster paths, `[]` on any failure, never throws. `fetchPosterPath(title)` (Stage 6): calls `/search/movie`, same auth/timeout pattern, returns first result's `poster_path` or `null` on any failure, never throws.
+- `lib/tmdb.ts` — server-only (Bearer token). `getTrendingPosters()`: TMDB `/trending/movie/day`, `next: { revalidate: 86400 }`, `AbortSignal.timeout(3000)`; `string[]` of poster paths, `[]` on any failure. `searchMovies(q)`: `/search/movie`, same auth/timeout, `cache: "no-store"`, ≤6 Zod-validated results, `{ degraded: true }` on any failure. Re-exports `posterUrl` from `lib/tmdb-image.ts`, which client components import instead.
+- `components/MovieSearchCombobox.tsx` — WAI-ARIA combobox: 300ms debounce, `AbortController` per request, arrows/Enter/Escape, loading/no-results/degraded states. With `name`, renders hidden `tmdbId`/`year`/`posterPath` inputs for a server action; without it, reports via `onSelectionChange` (Stage 7 inline edit).
 - `lib/lock.ts` — `withAdvisoryLock(tx, key, fn)`: sets `lock_timeout`, calls `pg_advisory_xact_lock`, runs `fn`, maps `55P03` → `LockTimeoutError`.
 - `lib/rate-limit.ts` — in-memory sliding window; pure function with injectable `now`.
 - `lib/logger.ts` — `pino` with `redact: ['email', 'user.email']`; `log.child({ event, userId, movieTitle, durationMs })`.

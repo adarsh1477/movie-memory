@@ -32,7 +32,8 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 - [ ] Dashboard shows name, email, photo (with initials fallback), favorite movie, logout
 - [ ] `/dashboard` unauthenticated → redirect to `/`
 - [ ] Fact card calls OpenAI, stores each generated fact
-- [ ] Movie poster fetched from TMDB on save/edit, path stored in `Movie.posterPath`; shown on dashboard hero card; gradient fallback when TMDB is unavailable or finds no match
+- [x] Movie search autocomplete at onboarding: `GET /api/movies/search?q=` (auth, Zod 2–100 chars, TMDB server-side, ≤6 results, `{ degraded: true }` on failure, per-user rate limit, `no-store`); accessible combobox reused by the Stage 7 inline edit
+- [x] Movie poster comes from the selected search result: `tmdbId`, `year`, `posterPath` stored on `Movie` at save; shown on dashboard hero card; gradient fallback for free-text titles (TMDB degraded or no match)
 
 **Variant A (backend)**
 - [ ] 60s server cache: return latest fact if `createdAt > now - 60s`, else regenerate (injectable clock, not `Date.now` directly in the service)
@@ -65,9 +66,9 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 3. **Data model + onboarding** — Prisma schema, migration, `/onboarding` server action with Zod
 4. **Dashboard shell** — layout, Sidebar/TopBar, Avatar with initials, MovieHeroCard with poster slot (`PosterImage` — `next/image` from stored path, or gradient film-frame fallback; read-only first), FactCard skeleton, `app/dashboard/error.tsx` + `app/global-error.tsx`
 5. **Fact service (Base)** — `lib/fact-service.ts` with generate-on-request + DB persist, structured log events wired
-6. **Variant A upgrade + TMDB dashboard poster** — layer 60s cache check + blocking advisory lock + OpenAI fallback + per-user rate limit into the same service; extend `lib/tmdb.ts` with `fetchPosterPath(title)` (TMDB `/search/movie` endpoint, same `TMDB_API_KEY` Bearer token, 3s `AbortSignal.timeout`, returns `null` on any failure); call `fetchPosterPath` inside the onboarding and movie-edit server actions, write result into `Movie.posterPath`; note: `lib/tmdb.ts` is already created (with `getTrendingPosters()` and `posterUrl()`) from Stage 10 — Stage 6 only adds the search function
+6. **Variant A upgrade + movie search** — *(Variant A was built together with Stage 5.)* 60s cache check + blocking advisory lock + OpenAI fallback + per-user rate limit in the same service. **Movie search replaces the planned `fetchPosterPath(title)` lookup:** `searchMovies(query)` in `lib/tmdb.ts` (TMDB `/search/movie`, Bearer token, 3s timeout, never throws, `{ results, degraded }`), `GET /api/movies/search`, `components/MovieSearchCombobox.tsx` in onboarding. The user picks the exact film, so `tmdbId`, `year` and `posterPath` are saved with the title in one write — no guess-the-first-result lookup. Free text is accepted only when TMDB is degraded or has no match (re-checked server-side in the action). The year is passed to the OpenAI prompt.
 7. **Typed API layer (Variant B)** — `/api/me`, `/api/me/movie`, `/api/fact` with shared Zod schemas and `lib/api.ts` client, `Cache-Control: no-store` on all authed responses
-8. **Inline edit + client cache (Variant B)** — optimistic edit, 30s in-memory client cache, countdown, FactCard error boundary with retry
+8. **Inline edit + client cache (Variant B)** — optimistic edit (reuses `MovieSearchCombobox` without `name`, via `onSelectionChange`), 30s in-memory client cache, countdown, FactCard error boundary with retry
 9. **Tests + CI** — Vitest suites + `.github/workflows/ci.yml` (typecheck + lint + tests + Postgres service for lock test)
 10. **Polish + README** — states, focus rings, docs, screenshots, AI-usage note; premium landing page: animated TMDB trending poster wall (`PosterBackground` — 3 marquee rows, `clamp(120px, 11vw, 210px)` poster height, 4-layer overlay, `getTrendingPosters()` with 24 h revalidate), multi-section layout with `ScrollFade` scroll animations, `FactCarousel` (swipe/keyboard/arrow nav), `MockCardPreview`; "Data from TMDB" footer credit on the landing page (conditional on poster data)
 
@@ -90,8 +91,9 @@ The 60s cache lookup is "latest fact for this user **and this movie title**." If
 - System: "You write one-sentence fun facts about a given movie. Keep it factual, PG, under 240 chars. Do not repeat any of the avoid list."
 - User message is a JSON object (data, not instructions) so the title cannot hijack the prompt:
   ```json
-  { "movie": "<title>", "avoid": ["<recent fact 1>", "<recent fact 2>", "<recent fact 3>"] }
+  { "movie": "<title>", "year": 1995, "avoid": ["<recent fact 1>", "<recent fact 2>", "<recent fact 3>"] }
   ```
+  `year` is `Movie.year` from the selected TMDB result, or `null` for free-text titles. The system prompt tells the model to stay on that specific film (not a remake with the same title).
 - `max_tokens: 120`, `temperature: 0.8`, single `AbortSignal` with an **8s total deadline** that covers the retry too. **Invariant: OpenAI deadline < Postgres `lock_timeout`** so a waiter always outlasts the holder's OpenAI call.
 - Retry **once**, with jitter (200–500ms), only on HTTP 429 or any 5xx; any other error short-circuits to the fallback.
 - "Avoid" list is the last N (=3) stored facts for `(userId, movieTitle)` — this nudges variety without a hard uniqueness check.
@@ -106,7 +108,10 @@ The 60s cache lookup is "latest fact for this user **and this movie title**." If
 - `movie-edit.test.tsx` — RTL: click edit → type → Save; assert optimistic UI change before the mock resolves; make the mock reject → assert revert to previous title and error toast.
 - `rate-limit.test.ts` — 31st request within 60s returns 429 with `retryAfterMs`; after clock advance beyond window, allowed again.
 - `env.test.ts` — missing `OPENAI_API_KEY` → import of `lib/env.ts` throws with a readable message naming the missing key.
-- `tmdb.test.ts` — covers `getTrendingPosters` (the landing page wall function): (a) successful response with mixed null/non-null `poster_path` → returns only the non-null strings; (b) unexpected response shape (missing `results` key) → returns `[]`; (c) `fetch` rejects (network error) → returns `[]`; (d) `TMDB_API_KEY` absent → returns `[]` and `fetch` is never called; (e) non-OK HTTP status (500) → returns `[]`. All cases use `vi.stubGlobal('fetch', ...)`; none hit the real TMDB API. Future: add parallel cases for `fetchPosterPath` (Stage 6 dashboard poster).
+- `tmdb.test.ts` — covers `getTrendingPosters` (the landing page wall function): (a) successful response with mixed null/non-null `poster_path` → returns only the non-null strings; (b) unexpected response shape (missing `results` key) → returns `[]`; (c) `fetch` rejects (network error) → returns `[]`; (d) `TMDB_API_KEY` absent → returns `[]` and `fetch` is never called; (e) non-OK HTTP status (500) → returns `[]`. All cases use `vi.stubGlobal('fetch', ...)`; none hit the real TMDB API. Also covers `searchMovies`: Bearer header + encoded query + timeout signal; mapping to `{tmdbId, title, year, posterPath}`; max 6; null year/poster; unsafe poster path dropped; malformed items skipped; missing key / non-OK / throw / bad body → `degraded: true`.
+- `movie-search-route.test.ts` — 401 without session; 400 for missing/short/whitespace/over-100 `q`; trims; degraded passthrough as 200; 429 + `Retry-After` after 30/min; `Cache-Control: no-store` on every response.
+- `movie-form.test.ts` — `parseMovieForm`: selection parsed and coerced; free text allowed; title still trimmed/length-checked; forged `tmdbId`/`year`/`posterPath` rejected.
+- `movie-search-combobox.test.tsx` — RTL: 300ms debounce, <2 chars no request, stale request aborted, arrows + Enter select and fill hidden inputs, edit clears selection, Escape closes, no-results and degraded states.
 
 **`vitest.setup.ts`** sets dummy values for every required env var (`DATABASE_URL=postgres://test`, `AUTH_SECRET=test`, `GOOGLE_CLIENT_ID=test`, `GOOGLE_CLIENT_SECRET=test`, `OPENAI_API_KEY=test`, `NODE_ENV=test`) before any test module is imported, so `lib/env.ts` doesn't throw during normal test runs. `env.test.ts` is the one suite that deliberately deletes a key via `vi.resetModules()` + `delete process.env.X` and re-imports to prove the startup check works.
 
@@ -181,6 +186,8 @@ model Movie {
   id         String   @id @default(cuid())
   userId     String   @unique            // one-to-one; simpler than list
   title      String                      // trimmed, 1..120
+  tmdbId     Int?                        // set when picked from search; null = free text
+  year       Int?                        // release year from TMDB; passed to the fact prompt
   posterPath String?                     // TMDB poster path e.g. /abc123.jpg; null = use gradient fallback
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -215,10 +222,12 @@ app/
     me/route.ts                // GET
     me/movie/route.ts          // PUT
     fact/route.ts              // GET (server always decides freshness)
+    movies/search/route.ts     // GET ?q= — TMDB search proxy, { results, degraded }
 components/
   Sidebar.tsx  TopBar.tsx
   Avatar.tsx                   // initials fallback
   MovieHeroCard.tsx            // inline edit
+  MovieSearchCombobox.tsx      // accessible TMDB autocomplete (onboarding + inline edit)
   PosterImage.tsx              // next/image from posterPath or gradient film-frame fallback
   FactCard.tsx                 // countdown + New fact
   Skeleton.tsx  SignInButton.tsx
@@ -231,7 +240,10 @@ lib/
   auth.ts                      // Auth.js v5 config, auth() export
   prisma.ts                    // singleton
   openai.ts                    // client + 8s AbortSignal + retry-on-429/5xx
-  tmdb.ts                      // getTrendingPosters(): landing wall, Bearer token, 24 h revalidate, returns []; posterUrl(path, size): URL helper; fetchPosterPath(title): dashboard search, returns null (Stage 6)
+  tmdb.ts                      // server-only: getTrendingPosters() landing wall; searchMovies(q) → { results, degraded }, never throws
+  tmdb-image.ts                // client-safe posterUrl(path, size)
+  movie-search-client.ts       // browser fetch for /api/movies/search (Zod-validated)
+  http.ts                      // jsonOk / jsonError envelopes with Cache-Control: no-store
   fact-service.ts              // cache check + lock + generate + fallback + logs
   lock.ts                      // blocking pg_advisory_xact_lock + in-mem fallback
   rate-limit.ts                // per-user sliding window (in-mem; swap for Redis)
@@ -252,7 +264,11 @@ tests/
   env.test.ts                  // missing env var throws at import
   api-client.test.ts           // 401/500 normalization
   movie-edit.test.tsx          // optimistic + revert
-  tmdb.test.ts                 // TMDB success, no result, fetch failure, timeout fallback
+  tmdb.test.ts                 // trending wall + searchMovies parsing/degraded
+  openai.test.ts               // retry rules, trimming, empty reply, year in prompt
+  movie-search-route.test.ts   // auth, q validation, rate limit, degraded, no-store
+  movie-form.test.ts           // server action form parsing
+  movie-search-combobox.test.tsx // debounce, abort, keyboard, states
 proxy.ts                       // UX-only cookie-presence redirect (no session verify)
 vitest.setup.ts                // dummy env vars so tests can import lib/env.ts
 eslint.config.js               // ESLint 9 flat config (Next 16 has no `next lint`)

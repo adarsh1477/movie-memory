@@ -2,6 +2,8 @@
 
 import { useActionState, useState } from "react";
 import { saveMovie, type SaveMovieState } from "@/app/onboarding/actions";
+import MovieSearchCombobox from "@/components/MovieSearchCombobox";
+import type { MovieSearchResult } from "@/lib/validation";
 
 const MAX = 120;
 const initial: SaveMovieState = {};
@@ -9,6 +11,7 @@ const initial: SaveMovieState = {};
 export default function OnboardingForm() {
   const [state, formAction, isPending] = useActionState(saveMovie, initial);
   const [count, setCount] = useState(0);
+  const [selection, setSelection] = useState<MovieSearchResult | null>(null);
 
   return (
     <form action={formAction} noValidate>
@@ -16,27 +19,17 @@ export default function OnboardingForm() {
         <label htmlFor="movie-title" className="text-sm font-medium text-text">
           Movie title
         </label>
-        <input
+        <MovieSearchCombobox
           id="movie-title"
           name="title"
-          type="text"
           maxLength={MAX}
-          autoComplete="off"
           autoFocus
           disabled={isPending}
-          onChange={(e) => setCount(e.target.value.length)}
-          aria-describedby={state.error ? "title-error" : "title-hint"}
-          aria-invalid={state.error ? true : undefined}
-          placeholder="e.g. Interstellar"
-          className={[
-            "w-full rounded-lg bg-surface-raised px-4 py-3 text-base text-text placeholder:text-text-muted",
-            "border outline-none transition-colors duration-150",
-            "disabled:cursor-not-allowed disabled:opacity-50",
-            "focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface",
-            state.error
-              ? "border-danger"
-              : "border-border hover:border-text-muted focus-visible:border-accent",
-          ].join(" ")}
+          invalid={Boolean(state.error)}
+          describedBy={state.error ? "title-error" : "title-hint"}
+          placeholder="Search, e.g. Interstellar"
+          onTextChange={(text) => setCount(text.length)}
+          onSelectionChange={setSelection}
         />
         <div className="flex min-h-[1.25rem] items-center justify-between gap-2">
           <div>
@@ -50,9 +43,11 @@ export default function OnboardingForm() {
                 {state.error}
               </p>
             ) : (
-              <span id="title-hint" className="sr-only">
-                Enter your favorite movie title, up to 120 characters.
-              </span>
+              <p id="title-hint" className="text-xs text-text-muted">
+                {selection
+                  ? `${selection.title}${selection.year ? ` (${selection.year})` : ""} selected`
+                  : "Start typing, then pick your movie from the list."}
+              </p>
             )}
           </div>
           <span

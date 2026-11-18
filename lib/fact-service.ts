@@ -54,7 +54,7 @@ export async function getFactForUser(userId: string, deps: FactServiceDeps = {})
     });
   }
 
-  const movie = await db.movie.findUnique({ where: { userId }, select: { title: true } });
+  const movie = await db.movie.findUnique({ where: { userId }, select: { title: true, year: true } });
   if (!movie) throw new AppErrorException({ code: "NO_MOVIE", message: "Pick a favorite movie first" });
 
   const movieTitle = movie.title;
@@ -96,7 +96,7 @@ export async function getFactForUser(userId: string, deps: FactServiceDeps = {})
           let content: string;
           try {
             content = await openai(
-              movieTitle,
+              { title: movieTitle, year: movie.year },
               recent.map((f) => f.content),
               AbortSignal.timeout(OPENAI_DEADLINE_MS),
             );

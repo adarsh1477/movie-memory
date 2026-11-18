@@ -64,21 +64,51 @@
 
 ### Movie posters via TMDB, not omitted
 
-- **Decision:** Fetch the TMDB poster path server-side when the user saves or edits their movie; store only the relative path in `Movie.posterPath`; assemble the full URL in `PosterImage` using the TMDB image base.
+- **Decision:** The poster comes from the TMDB search result the user picks; store only the relative path in `Movie.posterPath`; assemble the full URL with `posterUrl()` from the TMDB image base.
 - **Why:** A real poster makes the dashboard meaningfully more engaging than a plain title card, and the TMDB free tier comfortably covers this use pattern. Storing only the path (not the full URL) keeps the image-size config in one place (`next.config.ts`) rather than baked into every row.
 - **Considered:** Storing the full URL — rejected because it tightly couples the data to a specific TMDB CDN path/size, making future resizing or CDN changes require a migration.
 
 ### TMDB_API_KEY is optional, not required
 
-- **Decision:** `lib/env.ts` validates `TMDB_API_KEY` with `.optional()`. When absent, `fetchPosterPath` returns `null` immediately and no poster lookup is attempted. The app starts and runs normally.
+- **Decision:** `lib/env.ts` validates `TMDB_API_KEY` with `.optional()`. When absent, `searchMovies` returns `{ results: [], degraded: true }` without calling TMDB, the combobox says search is unavailable, and free-text titles are accepted. The app starts and runs normally.
 - **Why:** The poster is a visual enhancement, not a data-correctness requirement. Making the key optional means the app can be run locally or demoed without a TMDB account, and a TMDB outage at deploy time can't prevent a cold start.
 - **Considered:** Making it required (simpler env schema, one less null path). Rejected because a missing API key should degrade gracefully, not break the app.
 
-### Poster fetch on save/edit, not on page load
+### Movie search autocomplete replaces the post-save poster lookup
 
-- **Decision:** `fetchPosterPath` is called inside the server action when the movie is saved or edited, and the result is persisted to `Movie.posterPath`. The dashboard reads the stored path — it does not call TMDB on every request.
-- **Why:** Fetching on load would add TMDB latency to every dashboard render and re-fetch the same result each time. Storing it once on write is cheaper, more reliable, and aligns with how the title itself is stored. If TMDB changes the poster, the user can re-save to pick up the new path (or we add a background refresh later).
-- **Considered:** Fetching on every dashboard render (always fresh but always costly). Also considered a background job after save (more moving parts for the same result). Both rejected in favour of the simpler synchronous save path.
+- **Decision:** Onboarding (and the Stage 7 inline edit) uses a TMDB-backed combobox. The user picks the exact film, and `title`, `tmdbId`, `year` and `posterPath` are saved together. The planned `fetchPosterPath(title)` lookup after save is dropped. The dashboard reads the stored path and never calls TMDB per request.
+- **Why:** Guessing from a free-text title picks the first search result, which is often the wrong film (*Heat* 1986 vs 1995, remakes, sequels). Letting the user choose gets the right poster and a year to disambiguate facts, with no extra TMDB call at save time.
+- **Considered:** Keeping `fetchPosterPath` on save (simpler UI, frequently wrong film). Fetching on every dashboard render (always costly). Storing the full TMDB response (more data than we use).
+
+### Search route returns `{ degraded: true }` instead of an error
+
+- **Decision:** `GET /api/movies/search` returns `200 { results: [], degraded: true }` when TMDB is down, slow (3s timeout), returns an unexpected body, or `TMDB_API_KEY` is missing. Only auth (401), bad `q` (400) and the rate limit (429) are errors.
+- **Why:** TMDB being unavailable is an expected state the UI handles ("search is unavailable, you can save the title as typed"), not a failure of our request. A 5xx would push every client into error handling for a case that has a defined fallback. Malformed individual results are dropped rather than failing the whole list; an unsafe `poster_path` drops just that field.
+- **Considered:** 502 `UPSTREAM_FAILED` (makes the client treat a normal degraded mode as an error).
+
+### Free text only when search can't help, checked on the server
+
+- **Decision:** If no result was selected, the save action re-runs `searchMovies(title)` and rejects the save when TMDB is healthy and has matches ("Pick your movie from the suggestions"). Free text is accepted when TMDB is degraded or has no match.
+- **Why:** The client can't be trusted to report "TMDB was degraded", and without the check most saves would skip the selection and lose the poster and year. The extra TMDB call happens only on free-text submits.
+- **Considered:** Client-only enforcement (bypassable, and wrong when the client's last search was stale). Always allowing free text (most users would skip the dropdown).
+
+### Client-supplied `tmdbId` / `year` / `posterPath` are format-validated, not re-fetched
+
+- **Decision:** The hidden inputs are validated with Zod (positive int id, year 1870–2100, poster path regex `^/[A-Za-z0-9_-]{1,64}\.(jpg|jpeg|png|webp)$`) and stored. The server does not re-fetch `/movie/{id}` to confirm them.
+- **Why:** A user can only affect their own row, and the values are display-only. The strict poster regex is what matters: it means the stored value can only ever become a `https://image.tmdb.org/t/p/...` URL. Re-fetching would add a second TMDB dependency to every save.
+- **Considered:** Re-fetching details by `tmdbId` on save (authoritative, but slower, and it fails when TMDB is down).
+
+### Search has its own rate-limit bucket
+
+- **Decision:** `/api/movies/search` uses the same per-user policy as `/api/fact` (30 requests / 60s, in-process sliding window) but a separate limiter instance. Invalid queries are rejected before they count.
+- **Why:** Debounced typing can send several searches in a few seconds. Sharing one bucket would let editing your movie on the dashboard block your next fact, and vice versa.
+- **Considered:** One shared bucket (couples two unrelated features). No limit on search (every keystroke burst hits the TMDB quota unbounded).
+
+### Release year goes into the fact prompt
+
+- **Decision:** The OpenAI user message is `{ movie, year, avoid }`, with `year: null` for free-text titles, and the system prompt tells the model to stay on that specific film.
+- **Why:** Same-title films are common. Without the year the model happily mixes facts from the 1986 and 1995 *Heat*.
+- **Considered:** Appending the year to the title string (blurs the data/instruction boundary the JSON message keeps). Keying facts by `tmdbId` as well — deferred; see the known limitation in `DATA_MODEL.md`.
 
 ### Landing page TMDB trending poster wall
 
