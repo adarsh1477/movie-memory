@@ -2,6 +2,18 @@
 
 > Stub — edit before submitting. One short entry per decision: *decision*, *why*, *what I considered*.
 
+### Docker mapped to port 5433, not 5432
+
+- **Decision:** `docker-compose.yml` maps `5433:5432` (host 5433 → container 5432). `DATABASE_URL` uses port 5433.
+- **Why:** A native PostgreSQL install owns port 5432 on this machine. When Docker also mapped 5432, the OS delivered connections to the native Postgres instead of the container, producing P1000 auth failures that looked like SCRAM/MD5 mismatches. Moving Docker to 5433 avoids the conflict entirely.
+- **Considered:** Stopping the native Postgres service (would break other projects). Also considered patching auth — rejected because the real issue was the wrong process receiving the connection.
+
+### `.env` alongside `.env.local` for Prisma CLI
+
+- **Decision:** Keep a `.env` file containing only `DATABASE_URL` (identical value to `.env.local`).
+- **Why:** Prisma CLI (`prisma migrate dev`, `prisma generate`, `prisma studio`) reads `.env` by default and does not read `.env.local`, which is a Next.js convention. Without `.env`, every Prisma command requires an explicit `--env-file` flag. The file is covered by `.gitignore` (`.env*` rule) so it is never committed.
+- **Considered:** Always passing `--env-file .env.local` to every Prisma command (verbose, easy to forget in CI). Also considered symlinking — rejected as unnecessary complexity.
+
 ### Both variants implemented (not one)
 
 - **Decision:** Base + Variant A + Variant B.

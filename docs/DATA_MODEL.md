@@ -49,15 +49,16 @@ model VerificationToken {
 // ── Domain tables ───────────────────────────────────────────────────
 
 model User {
-  id        String   @id @default(cuid())
-  name      String?
-  email     String   @unique
-  image     String?
-  createdAt DateTime @default(now())
-  movie     Movie?
-  facts     Fact[]
-  accounts  Account[]
-  sessions  Session[]
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+  movie         Movie?
+  facts         Fact[]
+  accounts      Account[]
+  sessions      Session[]
 }
 
 model Movie {
