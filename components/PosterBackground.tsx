@@ -1,7 +1,14 @@
 import Image from "next/image";
-import { posterUrl } from "@/lib/tmdb";
+import { posterUrl } from "@/lib/tmdb-image";
 
-type Props = { posters: string[] };
+type Props = {
+  posters: string[];
+  /**
+   * "landing" (default): lighter overlay with a left gradient behind the hero text.
+   * "focus": darker, centred vignette so a single card in the middle stands out.
+   */
+  variant?: "landing" | "focus";
+};
 
 // At max poster height (210px): poster width = 140px, slot = 152px.
 //   40 slots × 152px = 6080px — covers any screen up to 3840px wide.
@@ -10,7 +17,8 @@ type Props = { posters: string[] };
 // 3-copy track → animate by exactly -33.333% = one tile width, seamless at all sizes.
 const MIN_TILE_ITEMS = 40;
 
-export default function PosterBackground({ posters }: Props) {
+export default function PosterBackground({ posters, variant = "landing" }: Props) {
+  const focus = variant === "focus";
   if (posters.length < 4) return null;
 
   // Repeat the base list until we have MIN_TILE_ITEMS per tile.
@@ -89,25 +97,37 @@ export default function PosterBackground({ posters }: Props) {
       </div>
 
       {/* Layer 1: uniform dark base */}
-      <div className="absolute inset-0 bg-background/[0.70]" />
+      <div className={`absolute inset-0 ${focus ? "bg-background/[0.80]" : "bg-background/[0.70]"}`} />
 
       {/* Layer 2: radial vignette — softens edges without hard patches */}
       <div
         className="absolute inset-0"
         style={{
-          background:
-            "radial-gradient(ellipse 85% 85% at 50% 50%, transparent 30%, rgba(11,11,15,0.5) 100%)",
+          background: focus
+            ? "radial-gradient(ellipse 70% 75% at 50% 40%, transparent 20%, rgba(11,11,15,0.75) 100%)"
+            : "radial-gradient(ellipse 85% 85% at 50% 50%, transparent 30%, rgba(11,11,15,0.5) 100%)",
         }}
       />
 
-      {/* Layer 3: soft left gradient (desktop only) — behind text column */}
-      <div
-        className="absolute inset-0 hidden lg:block"
-        style={{
-          background:
-            "linear-gradient(to right, rgba(11,11,15,0.6) 0%, rgba(11,11,15,0.2) 40%, transparent 62%)",
-        }}
-      />
+      {/* Layer 3 (landing): soft left gradient behind the hero text column.
+          Layer 3 (focus): faint amber bloom behind the centred card. */}
+      {focus ? (
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(ellipse 45% 40% at 50% 38%, rgba(245,184,65,0.07) 0%, transparent 70%)",
+          }}
+        />
+      ) : (
+        <div
+          className="absolute inset-0 hidden lg:block"
+          style={{
+            background:
+              "linear-gradient(to right, rgba(11,11,15,0.6) 0%, rgba(11,11,15,0.2) 40%, transparent 62%)",
+          }}
+        />
+      )}
 
       {/* Layer 4: top and bottom fades */}
       <div className="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-background to-transparent" />

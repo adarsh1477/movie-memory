@@ -47,12 +47,17 @@ const config: Config = {
           "0%": { backgroundPosition: "200% 0" },
           "100%": { backgroundPosition: "-200% 0" },
         },
+        "fade-in": {
+          "0%": { opacity: "0", transform: "translateY(4px) scale(0.99)" },
+          "100%": { opacity: "1", transform: "translateY(0) scale(1)" },
+        },
       },
       animation: {
         "fade-up": "fade-up 0.55s ease-out both",
         marquee: "marquee 40s linear infinite",
         "marquee-reverse": "marquee-reverse 48s linear infinite",
         shimmer: "shimmer 1.8s ease-in-out infinite",
+        "fade-in": "fade-in 0.2s ease-out both",
       },
     },
   },

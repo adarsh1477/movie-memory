@@ -1,7 +1,15 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type Ref,
+} from "react";
 import { fetchMovieSearch, type MovieSearchFn } from "@/lib/movie-search-client";
 import { posterUrl } from "@/lib/tmdb-image";
 import { SEARCH_MAX_CHARS, SEARCH_MIN_CHARS, type MovieSearchResult } from "@/lib/validation";
@@ -10,7 +18,14 @@ export const SEARCH_DEBOUNCE_MS = 300;
 
 type Status = "idle" | "loading" | "ready" | "unavailable";
 
+export type MovieSearchComboboxHandle = {
+  focus(): void;
+  /** Drops the current selection, keeps the text, and searches it again so alternatives show. */
+  clearSelection(): void;
+};
+
 export type MovieSearchComboboxProps = {
+  ref?: Ref<MovieSearchComboboxHandle>;
   id: string;
   /** When set, the text input uses this name and hidden tmdbId/year/posterPath inputs are rendered. */
   name?: string;
@@ -33,6 +48,7 @@ export type MovieSearchComboboxProps = {
  * Used by onboarding; built to drop into the Stage 7 inline edit unchanged.
  */
 export default function MovieSearchCombobox({
+  ref,
   id,
   name,
   defaultValue = "",
@@ -57,6 +73,7 @@ export default function MovieSearchCombobox({
 
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const inFlight = useRef<AbortController | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const listId = useId();
   const statusId = useId();
@@ -130,6 +147,23 @@ export default function MovieSearchCombobox({
     setStatus("idle");
   }
 
+  // Keep the keyboard-highlighted option visible when the list scrolls.
+  useEffect(() => {
+    if (active < 0) return;
+    document.getElementById(optionId(active))?.scrollIntoView?.({ block: "nearest" });
+    // optionId is derived from a stable useId value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => inputRef.current?.focus(),
+    clearSelection: () => {
+      updateSelection(null);
+      scheduleSearch(text);
+      inputRef.current?.focus();
+    },
+  }));
+
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     const count = results.length;
     switch (e.key) {
@@ -181,6 +215,7 @@ export default function MovieSearchCombobox({
     <div className="relative">
       <div className="relative">
         <input
+          ref={inputRef}
           id={id}
           name={name}
           type="text"
@@ -245,10 +280,10 @@ export default function MovieSearchCombobox({
       </p>
 
       {open && status !== "idle" && (
-        <div
-          className="absolute inset-x-0 top-full z-30 mt-2 overflow-hidden rounded-xl border border-border bg-surface-raised/95 shadow-[0_24px_60px_rgba(0,0,0,0.6)] backdrop-blur-md motion-safe:animate-fade-up"
-          style={{ animationDuration: "150ms" }}
-        >
+        // Absolutely positioned against the full-width field wrapper, so it matches the
+        // card's content width. Parents must not clip (no overflow-hidden on the card).
+        <div className="absolute inset-x-0 top-full z-50 mt-2 overflow-hidden rounded-xl border border-white/10 bg-[#17171E]/[0.98] shadow-[0_24px_60px_rgba(0,0,0,0.65),0_0_0_1px_rgba(0,0,0,0.4)] motion-safe:animate-fade-in">
+
           {status === "loading" && results.length === 0 && (
             <div className="flex flex-col gap-1 p-2" aria-hidden="true">
               {Array.from({ length: 3 }).map((_, i) => (
@@ -280,7 +315,7 @@ export default function MovieSearchCombobox({
             role="listbox"
             aria-label="Movie suggestions"
             hidden={!(results.length > 0 && (status === "ready" || status === "loading"))}
-            className={`max-h-80 overflow-y-auto p-1.5 transition-opacity duration-150 ${status === "loading" ? "opacity-60" : ""}`}
+            className={`scrollbar-thin max-h-[min(20rem,50vh)] overflow-y-auto overscroll-contain p-1.5 transition-opacity duration-150 ${status === "loading" ? "opacity-60" : ""}`}
           >
             {results.map((r, i) => (
               <li
@@ -293,10 +328,14 @@ export default function MovieSearchCombobox({
                 onClick={() => choose(r)}
                 onMouseEnter={() => setActive(i)}
                 className={[
-                  "flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 transition-colors duration-150",
-                  i === active ? "bg-white/[0.07]" : "hover:bg-white/[0.04]",
+                  "relative flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 transition-colors duration-150",
+                  i === active ? "bg-accent/[0.08]" : "hover:bg-white/[0.04]",
                 ].join(" ")}
               >
+                <span
+                  aria-hidden="true"
+                  className={`absolute inset-y-2 left-0 w-0.5 rounded-full bg-accent transition-opacity duration-150 ${i === active ? "opacity-100" : "opacity-0"}`}
+                />
                 <Thumb posterPath={r.posterPath} />
                 <div className="min-w-0 flex-1">
                   <p className={`truncate text-sm font-medium ${i === active ? "text-accent" : "text-text"}`}>
@@ -307,6 +346,13 @@ export default function MovieSearchCombobox({
               </li>
             ))}
           </ul>
+
+          <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] px-3 py-2 text-[11px] text-text-muted">
+            <span className="hidden sm:inline" aria-hidden="true">
+              ↑↓ to navigate · Enter to select · Esc to close
+            </span>
+            <span className="ml-auto opacity-70">Powered by TMDB</span>
+          </div>
         </div>
       )}
     </div>

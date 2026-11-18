@@ -6,6 +6,7 @@ import MockCardPreview from "@/components/MockCardPreview";
 import PosterBackground from "@/components/PosterBackground";
 import FactCarousel from "@/components/FactCarousel";
 import ScrollFade from "@/components/ScrollFade";
+import Logo from "@/components/Logo";
 import { getTrendingPosters } from "@/lib/tmdb";
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
@@ -118,19 +119,6 @@ function IconDevices({ className }: { className?: string }) {
       <path d="M6 17h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
       <rect x="14" y="8" width="4" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
     </svg>
-  );
-}
-
-// ─── Logo ─────────────────────────────────────────────────────────────────────
-
-function Logo() {
-  return (
-    <div className="flex items-center gap-2.5" aria-label="Movie Memory home">
-      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/10 text-accent">
-        <IconFilm className="h-5 w-5" />
-      </span>
-      <span className="text-base font-semibold text-text">Movie Memory</span>
-    </div>
   );
 }
 
