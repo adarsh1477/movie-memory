@@ -35,9 +35,19 @@ const config: Config = {
           "0%": { opacity: "0", transform: "translateY(14px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
+        marquee: {
+          from: { transform: "translateX(0)" },
+          to: { transform: "translateX(-33.333%)" },
+        },
+        "marquee-reverse": {
+          from: { transform: "translateX(-33.333%)" },
+          to: { transform: "translateX(0)" },
+        },
       },
       animation: {
         "fade-up": "fade-up 0.55s ease-out both",
+        marquee: "marquee 40s linear infinite",
+        "marquee-reverse": "marquee-reverse 48s linear infinite",
       },
     },
   },
