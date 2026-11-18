@@ -1,0 +1,38 @@
+import type { Config } from "tailwindcss";
+
+const config: Config = {
+  content: [
+    "./app/**/*.{ts,tsx}",
+    "./components/**/*.{ts,tsx}",
+    "./lib/**/*.{ts,tsx}",
+  ],
+  theme: {
+    extend: {
+      colors: {
+        background: "#0B0B0F",
+        surface: "#14141A",
+        "surface-raised": "#1C1C24",
+        border: "#2A2A35",
+        text: "#F5F5F7",
+        "text-muted": "#9A9AA8",
+        accent: "#F5B841",
+        "accent-hover": "#FFC95C",
+        danger: "#EF4444",
+        success: "#34D399",
+      },
+      fontFamily: {
+        sans: ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
+      },
+      borderRadius: {
+        "2xl": "1.5rem",
+      },
+      transitionDuration: {
+        "150": "150ms",
+        "200": "200ms",
+      },
+    },
+  },
+  plugins: [],
+};
+
+export default config;
