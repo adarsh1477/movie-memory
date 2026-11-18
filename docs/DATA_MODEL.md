@@ -62,12 +62,13 @@ model User {
 }
 
 model Movie {
-  id        String   @id @default(cuid())
-  userId    String   @unique
-  title     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  title      String
+  posterPath String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Fact {
@@ -85,6 +86,8 @@ model Fact {
 ## Per-choice reasoning
 
 **`User.email` is `@unique` but `name` and `image` are nullable.** Google guarantees an email on every account; the display name and photo can both legitimately be absent. The nullability lets the DB enforce what Google guarantees and nothing more. Rendering handles the nulls (initials avatar; email prefix as name fallback).
+
+**`Movie.posterPath` is nullable.** It stores the TMDB-relative path (e.g. `/abc123.jpg`) fetched once when the user saves or edits their movie. Storing the path rather than the full URL means the image base URL can change (or be swapped to a different TMDB size) without a migration. `null` means TMDB was unavailable, found no match, or `TMDB_API_KEY` is absent — the UI renders a generated gradient film-frame fallback instead. The app never breaks regardless of this column's value.
 
 **`Movie` is one-to-one with `User`.** The spec is about "the favorite movie" — singular. A list of movies would complicate the 60s cache lookup key and the "edit movie → invalidate" flow for Variant B. Keeping it as a single row means `prisma.movie.upsert({ where: { userId } })` and the onboarding and edit flows share the same code path.
 

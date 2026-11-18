@@ -19,15 +19,17 @@ app/
 components/
   Sidebar.tsx  TopBar.tsx
   Avatar.tsx                     Initials fallback when image missing or 404s
-  MovieHeroCard.tsx              Inline edit (view/edit modes, optimistic Save)
+  MovieHeroCard.tsx              Inline edit (view/edit modes, optimistic Save); contains PosterImage
+  PosterImage.tsx                next/image from posterPath or gradient film-frame fallback
   FactCard.tsx                   useFact() hook, skeleton, countdown, retry
   SignInButton.tsx  SignOutButton.tsx
   Skeleton.tsx                   Shared shimmer primitive
 lib/
-  env.ts                         Zod-validated process.env, throws at import
+  env.ts                         Zod-validated process.env, throws at import; TMDB_API_KEY optional
   auth.ts                        Auth.js v5 config + auth() + handlers export
   prisma.ts                      PrismaClient singleton (globalThis in dev)
   openai.ts                      generateFact(movie, avoid[], signal)
+  tmdb.ts                        fetchPosterPath(title): server-only TMDB search, 3s timeout, returns null on any failure
   fact-service.ts                getFactForUser(userId) — the main service
   lock.ts                        withAdvisoryLock(tx, key, fn)
   rate-limit.ts                  consume(userId): { ok, retryAfterMs }
@@ -48,6 +50,7 @@ tests/
   env.test.ts
   api-client.test.ts
   movie-edit.test.tsx
+  tmdb.test.ts                   TMDB success, no result, fetch failure, timeout fallback
 proxy.ts                         Cookie-presence redirect only
 vitest.setup.ts                  Dummy env vars for test imports
 eslint.config.js                 ESLint 9 flat config
@@ -68,6 +71,7 @@ export const env: {
   GOOGLE_CLIENT_ID: string
   GOOGLE_CLIENT_SECRET: string
   OPENAI_API_KEY: string
+  TMDB_API_KEY: string | undefined   // optional — absent → poster lookup silently skipped
   NODE_ENV: 'development' | 'production' | 'test'
 }
 
@@ -81,6 +85,11 @@ export async function generateFact(
   avoid: string[],
   signal: AbortSignal,
 ): Promise<string>            // throws OpenAiError on retry-exhausted failure
+
+// lib/tmdb.ts
+export async function fetchPosterPath(
+  title: string,
+): Promise<string | null>    // null on no match, fetch error, timeout, or absent TMDB_API_KEY
 
 // lib/lock.ts
 export async function withAdvisoryLock<T>(
@@ -135,7 +144,7 @@ export type MovieInput = z.infer<typeof MovieInput>
 
 export const MeResponse = z.object({
   user:  z.object({ id: z.string(), name: z.string().nullable(), email: z.string(), image: z.string().nullable() }),
-  movie: z.object({ title: z.string(), updatedAt: z.string() }).nullable(),
+  movie: z.object({ title: z.string(), posterPath: z.string().nullable(), updatedAt: z.string() }).nullable(),
 })
 export type MeResponse = z.infer<typeof MeResponse>
 
@@ -173,6 +182,7 @@ All authed responses: `Cache-Control: no-store`.
 - `lib/auth.ts` — Auth.js v5 config with Google provider + Prisma adapter + DB sessions; exports `auth`, `handlers`, `signIn`, `signOut`.
 - `lib/prisma.ts` — single `PrismaClient` across hot reloads.
 - `lib/openai.ts` — one function: `generateFact(movie, avoid, signal)`. Retries once on 429/5xx. No business logic.
+- `lib/tmdb.ts` — one function: `fetchPosterPath(title)`. Calls TMDB `/search/movie` with the Read Access Token as a Bearer header. `AbortSignal.timeout(3000)`. Returns the first result's `poster_path` or `null` on any failure. Never throws.
 - `lib/lock.ts` — `withAdvisoryLock(tx, key, fn)`: sets `lock_timeout`, calls `pg_advisory_xact_lock`, runs `fn`, maps `55P03` → `LockTimeoutError`.
 - `lib/rate-limit.ts` — in-memory sliding window; pure function with injectable `now`.
 - `lib/logger.ts` — `pino` with `redact: ['email', 'user.email']`; `log.child({ event, userId, movieTitle, durationMs })`.

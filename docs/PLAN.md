@@ -16,7 +16,7 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 - Vitest + React Testing Library, `node` env for service tests, `jsdom` for component tests, **injectable clock** (`Clock` interface defaulted to `Date.now`) so the 60s window can be advanced in tests without timers
 - **Minimal `proxy.ts` (formerly `middleware.ts`) — UX only, not security** — `proxy.ts` matches `/dashboard/:path*` and `/onboarding/:path*` and redirects to `/` if the Auth.js session cookie is absent. It **does not verify the session** (DB session lookups aren't available in Edge anyway); it only avoids rendering a protected page just to bounce. The real protection stays in server components and route handlers via `auth()`. Auth.js v5 docs explicitly endorse this split: "verify the session as close to your data fetching as possible."
 - **Structured logging via `pino`** — JSON output, redact PII (email), include `userId`, `movieTitle`, request id, and a stable `event` key. Fact-generation events: `fact.cache_hit`, `fact.cache_miss`, `fact.lock_wait_start`, `fact.lock_acquired`, `fact.lock_wait_timeout`, `fact.openai_call`, `fact.openai_fallback`, `fact.stale_served`, `fact.rate_limited`. Each includes `durationMs`.
-- **Zod-validated env at startup** — `lib/env.ts` parses `process.env` once with a Zod schema (`DATABASE_URL`, `AUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OPENAI_API_KEY`, `NODE_ENV`). Any missing or malformed var throws at import time — the server fails fast rather than at the first user request. Only `NEXT_PUBLIC_*` keys are allowed on the client side; the schema whitelist enforces this.
+- **Zod-validated env at startup** — `lib/env.ts` parses `process.env` once with a Zod schema (`DATABASE_URL`, `AUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OPENAI_API_KEY`, `NODE_ENV`). `TMDB_API_KEY` is **optional** (`.optional()`) — when absent, poster lookup is silently skipped and the gradient fallback is shown. Any required missing or malformed var throws at import time. Only `NEXT_PUBLIC_*` keys are allowed on the client side; the schema whitelist enforces this.
 - **Per-user rate limit on `/api/fact`** — in-process sliding window (`Map<userId, number[]>`) with the same honest single-instance caveat as the in-memory lock fallback: swap for Upstash Redis in production. Default: **30 requests per 60s per user**. Exceeded → `429` with `{ ok: false, error: { code: 'RATE_LIMITED', retryAfterMs } }` and `Retry-After` header.
 - **React error boundaries** — route-level `error.tsx` per segment (`app/dashboard/error.tsx`, `app/onboarding/error.tsx`) plus a `app/global-error.tsx`. A FactCard failure should not take down the sidebar or hero card — the FactCard sits in its own `<ErrorBoundary>` with a retry CTA.
 - **CI via GitHub Actions** — `.github/workflows/ci.yml`: Node 20, pnpm, Postgres service container, `prisma generate`, `tsc --noEmit`, `vitest run`, `eslint .` (Next.js 16 removed the `next lint` wrapper; ESLint 9 flat config is now the direct path). Runs on PR and `main`. The lock test runs against the service container so CI exercises the real concurrency path.
@@ -32,6 +32,7 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 - [ ] Dashboard shows name, email, photo (with initials fallback), favorite movie, logout
 - [ ] `/dashboard` unauthenticated → redirect to `/`
 - [ ] Fact card calls OpenAI, stores each generated fact
+- [ ] Movie poster fetched from TMDB on save/edit, path stored in `Movie.posterPath`; shown on dashboard hero card; gradient fallback when TMDB is unavailable or finds no match
 
 **Variant A (backend)**
 - [ ] 60s server cache: return latest fact if `createdAt > now - 60s`, else regenerate (injectable clock, not `Date.now` directly in the service)
@@ -62,9 +63,9 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 1. **Scaffold** — Next.js 16 app, Tailwind tokens, `prisma init`, docker-compose Postgres, `.env.example`, `lib/env.ts` (Zod), `lib/logger.ts` (`pino`)
 2. **Auth** — Auth.js v5 with Google + Prisma adapter + DB sessions; root `/` router logic; `auth()` in server components / handlers as the real guard; minimal `proxy.ts` for cookie-presence redirect on `/dashboard` and `/onboarding`
 3. **Data model + onboarding** — Prisma schema, migration, `/onboarding` server action with Zod
-4. **Dashboard shell** — layout, Sidebar/TopBar, Avatar with initials, MovieHeroCard (read-only first), FactCard skeleton, `app/dashboard/error.tsx` + `app/global-error.tsx`
+4. **Dashboard shell** — layout, Sidebar/TopBar, Avatar with initials, MovieHeroCard with poster slot (`PosterImage` — `next/image` from stored path, or gradient film-frame fallback; read-only first), FactCard skeleton, `app/dashboard/error.tsx` + `app/global-error.tsx`
 5. **Fact service (Base)** — `lib/fact-service.ts` with generate-on-request + DB persist, structured log events wired
-6. **Variant A upgrade** — layer 60s cache check + blocking advisory lock + OpenAI fallback + per-user rate limit into the same service
+6. **Variant A upgrade + TMDB poster** — layer 60s cache check + blocking advisory lock + OpenAI fallback + per-user rate limit into the same service; add `lib/tmdb.ts` (TMDB search endpoint, Bearer token, 3s timeout, graceful fallback); call `fetchPosterPath(title)` inside the onboarding and movie-edit server actions, write result into `Movie.posterPath`
 7. **Typed API layer (Variant B)** — `/api/me`, `/api/me/movie`, `/api/fact` with shared Zod schemas and `lib/api.ts` client, `Cache-Control: no-store` on all authed responses
 8. **Inline edit + client cache (Variant B)** — optimistic edit, 30s in-memory client cache, countdown, FactCard error boundary with retry
 9. **Tests + CI** — Vitest suites + `.github/workflows/ci.yml` (typecheck + lint + tests + Postgres service for lock test)
@@ -105,6 +106,7 @@ The 60s cache lookup is "latest fact for this user **and this movie title**." If
 - `movie-edit.test.tsx` — RTL: click edit → type → Save; assert optimistic UI change before the mock resolves; make the mock reject → assert revert to previous title and error toast.
 - `rate-limit.test.ts` — 31st request within 60s returns 429 with `retryAfterMs`; after clock advance beyond window, allowed again.
 - `env.test.ts` — missing `OPENAI_API_KEY` → import of `lib/env.ts` throws with a readable message naming the missing key.
+- `tmdb.test.ts` — (a) TMDB returns a result → `fetchPosterPath` returns the poster path string; (b) TMDB returns empty results array → returns `null`; (c) `fetch` rejects (network error) → returns `null`; (d) `fetch` takes longer than 3s timeout → returns `null`. All four cases use `vi.stubGlobal('fetch', ...)` or mock `AbortSignal.timeout`; none hit the real TMDB API.
 
 **`vitest.setup.ts`** sets dummy values for every required env var (`DATABASE_URL=postgres://test`, `AUTH_SECRET=test`, `GOOGLE_CLIENT_ID=test`, `GOOGLE_CLIENT_SECRET=test`, `OPENAI_API_KEY=test`, `NODE_ENV=test`) before any test module is imported, so `lib/env.ts` doesn't throw during normal test runs. `env.test.ts` is the one suite that deliberately deletes a key via `vi.resetModules()` + `delete process.env.X` and re-imports to prove the startup check works.
 
@@ -176,12 +178,13 @@ model User {
 }
 
 model Movie {
-  id        String   @id @default(cuid())
-  userId    String   @unique            // one-to-one; simpler than list
-  title     String                      // trimmed, 1..120
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  userId     String   @unique            // one-to-one; simpler than list
+  title      String                      // trimmed, 1..120
+  posterPath String?                     // TMDB poster path e.g. /abc123.jpg; null = use gradient fallback
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Fact {
@@ -216,13 +219,15 @@ components/
   Sidebar.tsx  TopBar.tsx
   Avatar.tsx                   // initials fallback
   MovieHeroCard.tsx            // inline edit
+  PosterImage.tsx              // next/image from posterPath or gradient film-frame fallback
   FactCard.tsx                 // countdown + New fact
   Skeleton.tsx  SignInButton.tsx
 lib/
-  env.ts                       // Zod-validated process.env, throws at import
+  env.ts                       // Zod-validated process.env, throws at import; TMDB_API_KEY optional
   auth.ts                      // Auth.js v5 config, auth() export
   prisma.ts                    // singleton
   openai.ts                    // client + 8s AbortSignal + retry-on-429/5xx
+  tmdb.ts                      // fetchPosterPath(title): server-only TMDB search, 3s timeout, graceful null
   fact-service.ts              // cache check + lock + generate + fallback + logs
   lock.ts                      // blocking pg_advisory_xact_lock + in-mem fallback
   rate-limit.ts                // per-user sliding window (in-mem; swap for Redis)
@@ -243,6 +248,7 @@ tests/
   env.test.ts                  // missing env var throws at import
   api-client.test.ts           // 401/500 normalization
   movie-edit.test.tsx          // optimistic + revert
+  tmdb.test.ts                 // TMDB success, no result, fetch failure, timeout fallback
 proxy.ts                       // UX-only cookie-presence redirect (no session verify)
 vitest.setup.ts                // dummy env vars so tests can import lib/env.ts
 eslint.config.js               // ESLint 9 flat config (Next 16 has no `next lint`)
@@ -298,7 +304,7 @@ Client (Variant B): `useFact()` hook keeps `{ fact, generatedAt, stale }` in an 
 
 ## What I will NOT do
 
-- No posters, no copied branding from `ui.png` (used for mood/layout only)
+- No copied branding from `ui.png` (used for mood/layout only)
 - No feature flags, no backwards-compat shims (greenfield)
 - No comments explaining what well-named code already says
 - No README features beyond what the spec asks for

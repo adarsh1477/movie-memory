@@ -1,6 +1,6 @@
 # UI Specification
 
-Dark cinematic theme. Original — no posters, no copied branding. The `ui.png` reference was used only for layout and mood (sidebar + hero + content stack).
+Dark cinematic theme. Original design — no copied branding. The `ui.png` reference was used only for layout and mood (sidebar + hero + content stack). Movie posters are fetched from TMDB and displayed on the dashboard hero card; a generated gradient film-frame serves as the fallback when no poster is available.
 
 ## Design tokens
 
@@ -63,8 +63,16 @@ Props: `{ src: string | null; name: string | null; email: string; size?: 'sm' | 
 ### `MovieHeroCard`
 
 Two modes.
-- **View**: large title (`text-2xl font-semibold`), muted "your favorite movie" label above, a small `Edit` button at the top-right that swaps to edit mode.
-- **Edit**: input (prefilled, autoselected on open), `Save` (accent) and `Cancel` (`text-muted` outlined). Save triggers an optimistic update via `useMe()` hook — on failure, the input reverts and a toast (`danger`) shows the server message.
+- **View**: `PosterImage` on the left (see below), large title (`text-2xl font-semibold`) and muted "your favorite movie" label to the right, a small `Edit` button at the top-right that swaps to edit mode.
+- **Edit**: input (prefilled, autoselected on open), `Save` (accent) and `Cancel` (`text-muted` outlined). Save triggers an optimistic update via `useMe()` hook — on failure, the input reverts and a toast (`danger`) shows the server message. The poster updates to reflect the new title after the server responds (the new `posterPath` is included in the `MeResponse`).
+
+### `PosterImage`
+
+Props: `{ posterPath: string | null; title: string; className?: string }`.
+
+- If `posterPath` is a non-empty string → render `<Image>` (from `next/image`) with `src` assembled as `https://image.tmdb.org/t/p/w500{posterPath}`. `width={160}` `height={240}` `alt={title}` with `rounded-xl` and a subtle `border border-border`.
+- If `posterPath` is null → render a gradient film-frame fallback: a `rounded-xl bg-gradient-to-br from-surface-raised to-border` div of the same dimensions, with a centered `IconFilm` icon in `text-text-muted` and the film-strip tick marks rendered as CSS.
+- Both variants are the same outer size so layout does not shift between poster and fallback states.
 
 ### `FactCard`
 
@@ -90,6 +98,8 @@ States:
 | Missing Google photo   | Avatar           | Initials from name; if name null, from email prefix                      |
 | Missing Google name    | Sidebar/TopBar   | Fallback to email prefix (`foo` from `foo@bar.com`)                      |
 | Session expired mid-use| Any API call     | Typed `UNAUTHORIZED` from `lib/api.ts` → client clears cache → redirect  |
+| Poster unavailable     | PosterImage      | Gradient film-frame fallback (same dimensions, no layout shift)          |
+| TMDB down at save time | Server action    | `posterPath` saved as `null`; fallback shown; no error surfaced to user  |
 
 ## Interaction timings
 
@@ -97,6 +107,10 @@ States:
 - Skeleton → content crossfade: 200ms
 - Edit mode toggle: 200ms
 - Countdown updates: every 1s (`setInterval`); cleared on unmount
+
+## Footer
+
+Every authenticated page includes a minimal footer with the text "Movie data from TMDB" linking to `https://www.themoviedb.org/` (opens in new tab, `rel="noopener noreferrer"`). Styled `text-xs text-text-muted`; uses the TMDB wordmark only if licensing permits, otherwise plain text.
 
 ## Accessibility
 

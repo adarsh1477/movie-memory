@@ -14,7 +14,7 @@ app/layout.tsx (RootLayout)
         └── <ErrorBoundary> wrapping the card body with a retry CTA
 ```
 
-The `onboarding` segment composes `OnboardingForm` (client — Save button, Zod-mirrored validation hints). Landing (`/`) is a server component that calls `auth()` and renders either `SignInButton` or `redirect()`.
+The `onboarding` segment composes `OnboardingForm` (client — Save button, Zod-mirrored validation hints). Landing (`/`) is a server component that calls `auth()` and renders either `SignInButton` or `redirect()`. `MovieHeroCard` contains `PosterImage` (client — renders `next/image` from `posterPath`, or a gradient film-frame fallback when the path is null).
 
 ## Request flows (as boxes + arrows for a diagram)
 
@@ -50,7 +50,10 @@ Browser ──GET /onboarding──▶ OnboardingPage (server component)
    ▼
 Server Action saveFavoriteMovie(formData)
    ├── zod.parse({ title: trimmed, 1..120 })
-   ├── prisma.movie.upsert({ where: { userId }, ... })
+   ├── lib/tmdb.ts fetchPosterPath(title)   ← server-only, 3s timeout
+   │     ├── success → posterPath string (e.g. "/abc123.jpg")
+   │     └── failure / no match / TMDB_API_KEY absent → null (silent fallback)
+   ├── prisma.movie.upsert({ where: { userId }, data: { title, posterPath } })
    └── redirect(/dashboard)
 ```
 
@@ -110,9 +113,13 @@ Every branch logs a `fact.*` event with `durationMs`. Response always sent with 
 
 ## Server-only vs client-only boundaries
 
-- Server-only: `lib/env.ts`, `lib/prisma.ts`, `lib/openai.ts`, `lib/fact-service.ts`, `lib/lock.ts`, `lib/rate-limit.ts`, `lib/logger.ts`, `lib/auth.ts`, all route handlers, all `page.tsx` by default.
-- Client-only: `components/MovieHeroCard.tsx` (inline edit), `components/FactCard.tsx` (hook), `components/SignInButton.tsx`, `components/SignOutButton.tsx`, `lib/api.ts`, `lib/client-cache.ts`.
+- Server-only: `lib/env.ts`, `lib/prisma.ts`, `lib/openai.ts`, `lib/tmdb.ts`, `lib/fact-service.ts`, `lib/lock.ts`, `lib/rate-limit.ts`, `lib/logger.ts`, `lib/auth.ts`, all route handlers, all `page.tsx` by default. `TMDB_API_KEY` never appears in any `NEXT_PUBLIC_*` var or client bundle.
+- Client-only: `components/MovieHeroCard.tsx` (inline edit), `components/PosterImage.tsx` (renders stored path via `next/image`), `components/FactCard.tsx` (hook), `components/SignInButton.tsx`, `components/SignOutButton.tsx`, `lib/api.ts`, `lib/client-cache.ts`.
 - `lib/validation.ts` and `lib/errors.ts` are shared — no server-only imports, so they're safe on both sides.
+
+## Image hosting
+
+TMDB poster paths are relative (e.g. `/abc123.jpg`). The full URL is assembled as `https://image.tmdb.org/t/p/w500{posterPath}`. `next.config.ts` must include `images.remotePatterns` with `hostname: 'image.tmdb.org'` so `next/image` is permitted to serve them. The posterPath is stored once at save/edit time — `PosterImage` only does URL construction, not API calls.
 
 ## Proxy (UX only)
 
