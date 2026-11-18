@@ -30,6 +30,15 @@ const config: Config = {
         "150": "150ms",
         "200": "200ms",
       },
+      keyframes: {
+        "fade-up": {
+          "0%": { opacity: "0", transform: "translateY(14px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+      },
+      animation: {
+        "fade-up": "fade-up 0.55s ease-out both",
+      },
     },
   },
   plugins: [],
