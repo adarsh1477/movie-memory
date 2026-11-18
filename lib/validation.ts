@@ -63,3 +63,77 @@ export function parseMovieForm(formData: FormData) {
     posterPath: formData.get("posterPath"),
   });
 }
+
+/** What the movie service accepts, from either the form or the JSON API. */
+export type MovieSaveInput = MovieFormInput;
+
+// ── API contracts (shared by route handlers and lib/api.ts) ───────────────────
+
+const nullishToUndefined = <T extends z.ZodTypeAny>(schema: T) =>
+  schema.nullish().transform((v) => v ?? undefined);
+
+/** PUT /api/me/movie body. Unknown keys (e.g. a client-sent userId) are stripped. */
+export const MoviePutBody = z.object({
+  title: movieTitleSchema,
+  tmdbId: nullishToUndefined(tmdbIdSchema),
+  year: nullishToUndefined(yearSchema),
+  posterPath: nullishToUndefined(posterPathSchema),
+});
+export type MoviePutBody = z.input<typeof MoviePutBody>;
+
+export const MeResponse = z.object({
+  user: z.object({
+    id: z.string(),
+    name: z.string().nullable(),
+    email: z.string(),
+    image: z.string().nullable(),
+  }),
+  movie: z
+    .object({
+      title: z.string(),
+      tmdbId: z.number().int().nullable(),
+      year: z.number().int().nullable(),
+      posterPath: z.string().nullable(),
+      updatedAt: z.string(), // ISO
+    })
+    .nullable(),
+});
+export type MeResponse = z.infer<typeof MeResponse>;
+
+export const FactResponse = z.object({
+  content: z.string(),
+  movieTitle: z.string(),
+  generatedAt: z.string(), // ISO
+  stale: z.boolean(),
+});
+export type FactResponse = z.infer<typeof FactResponse>;
+
+export const API_ERROR_CODES = [
+  "UNAUTHORIZED",
+  "VALIDATION",
+  "NOT_FOUND",
+  "NO_MOVIE",
+  "RATE_LIMITED",
+  "UPSTREAM_FAILED",
+  "INTERNAL",
+] as const;
+
+export const ApiError = z.object({
+  code: z.enum(API_ERROR_CODES),
+  message: z.string(),
+  retryAfterMs: z.number().nonnegative().optional(),
+  fieldErrors: z.record(z.string(), z.string()).optional(),
+});
+export type ApiError = z.infer<typeof ApiError>;
+
+export type Envelope<T> = { ok: true; data: T } | { ok: false; error: ApiError };
+
+/** First message per top-level field, for `fieldErrors` in a VALIDATION response. */
+export function fieldErrorsOf(error: z.ZodError): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const issue of error.errors) {
+    const key = String(issue.path[0] ?? "_");
+    out[key] ??= issue.message;
+  }
+  return out;
+}

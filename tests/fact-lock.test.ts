@@ -34,7 +34,7 @@ describe.skipIf(skipPg)("fact lock (real Postgres)", () => {
     const user = await newUser();
     const openai = vi.fn(async () => {
       await sleep(200);
-      return "one and only fact";
+      return { content: "one and only fact", mode: "knowledge" as const };
     });
     const deps = depsWith(openai);
 
@@ -51,7 +51,7 @@ describe.skipIf(skipPg)("fact lock (real Postgres)", () => {
     const user = await newUser();
     const openai = vi.fn(async () => {
       await sleep(7_000);
-      return "slow fact";
+      return { content: "slow fact", mode: "knowledge" as const };
     });
     const deps = depsWith(openai);
 
@@ -73,7 +73,7 @@ describe.skipIf(skipPg)("fact lock (real Postgres)", () => {
     // Ignores its deadline on purpose to hold the lock for 11s (> 10s lock_timeout).
     const openai = vi.fn(async () => {
       await sleep(11_000);
-      return "very slow fact";
+      return { content: "very slow fact", mode: "knowledge" as const };
     });
     const deps = depsWith(openai);
 

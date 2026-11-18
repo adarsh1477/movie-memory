@@ -4,7 +4,7 @@ Project context for future sessions. Read `docs/` for depth; this file is the in
 
 ## Stack
 
-Next.js 16 App Router, TypeScript strict, Prisma 5 + Postgres 16, Auth.js v5 (Google, DB sessions), OpenAI (`gpt-4o-mini`), Vitest + RTL, Tailwind v3, pino.
+Next.js 16 App Router, TypeScript strict, Prisma 5 + Postgres 16, Auth.js v5 (Google, DB sessions), OpenAI (`OPENAI_MODEL`, default `gpt-4.1-mini`; non-reasoning chat models only), Vitest + RTL, Tailwind v3, pino.
 
 ## Commands
 

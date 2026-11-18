@@ -2,9 +2,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Fact, PrismaClient } from "@prisma/client";
 import { Prisma } from "@prisma/client";
-import { getFactForUser, type FactServiceDeps } from "@/lib/fact-service";
+import { getFactForUser, AVOID_COUNT, type FactServiceDeps } from "@/lib/fact-service";
+import { FACT_ANGLES } from "@/lib/fact-prompt";
 import { createRateLimiter } from "@/lib/rate-limit";
 import { AppErrorException, OpenAiError } from "@/lib/errors";
+import type { MovieDetails } from "@/lib/tmdb";
 
 // ── In-memory stand-in for the Prisma calls the service makes ─────────────────
 
@@ -12,8 +14,11 @@ type FakeDb = {
   facts: Fact[];
   movies: Map<string, string>;
   years?: Map<string, number>;
+  tmdbIds?: Map<string, number>;
   onLock?: () => void;
   lockError?: unknown;
+  /** Ordered log of interesting calls, to check what happens before the lock. */
+  events: string[];
 };
 
 function fakePrisma(db: FakeDb) {
@@ -27,7 +32,9 @@ function fakePrisma(db: FakeDb) {
     movie: {
       findUnique: async ({ where }: { where: { userId: string } }) => {
         const title = db.movies.get(where.userId);
-        return title ? { title, year: db.years?.get(where.userId) ?? null } : null;
+        return title
+          ? { title, year: db.years?.get(where.userId) ?? null, tmdbId: db.tmdbIds?.get(where.userId) ?? null }
+          : null;
       },
     },
     fact: {
@@ -35,6 +42,7 @@ function fakePrisma(db: FakeDb) {
         byUserAndTitle(where)[0] ?? null,
       findMany: async ({ where, take }: { where: { userId: string; movieTitle: string }; take: number }) =>
         byUserAndTitle(where).slice(0, take),
+      count: async ({ where }: { where: { userId: string; movieTitle: string } }) => byUserAndTitle(where).length,
       create: async ({ data }: { data: Omit<Fact, "id"> }) => {
         const fact = { id: `f${++seq}`, ...data };
         db.facts.push(fact);
@@ -43,6 +51,7 @@ function fakePrisma(db: FakeDb) {
     },
     $executeRawUnsafe: async () => 0,
     $executeRaw: async () => {
+      db.events.push("lock");
       if (db.lockError) throw db.lockError;
       db.onLock?.();
       return 1;
@@ -64,7 +73,26 @@ const T0 = Date.UTC(2026, 10, 18, 12, 0, 0);
 let now: number;
 let db: FakeDb;
 let openai: ReturnType<typeof vi.fn>;
+let movieDetails: ReturnType<typeof vi.fn>;
 let deps: FactServiceDeps;
+
+const HEAT_DETAILS: MovieDetails = {
+  title: "Heat",
+  tagline: "A Los Angeles crime saga",
+  overview: "Obsessive master thief Neil McCauley leads a top-notch crew…",
+  releaseDate: "1995-12-15",
+  status: "Released",
+  runtimeMinutes: 170,
+  genres: ["Action", "Crime", "Drama"],
+  directors: ["Michael Mann"],
+  cast: [
+    { name: "Al Pacino", character: "Lt. Vincent Hanna" },
+    { name: "Robert De Niro", character: "Neil McCauley" },
+  ],
+  productionCompanies: ["Regency Enterprises"],
+  keywords: ["heist", "los angeles"],
+};
+const TODAY = "2026-11-18";
 
 beforeEach(() => {
   now = T0;
@@ -72,14 +100,24 @@ beforeEach(() => {
     facts: [],
     movies: new Map([["userA", "Heat"], ["userB", "Heat"]]),
     years: new Map([["userA", 1995]]),
+    tmdbIds: new Map([["userA", 949]]),
+    events: [],
   };
   let n = 0;
-  openai = vi.fn(async () => `fact #${++n}`);
+  openai = vi.fn(async () => {
+    db.events.push("openai");
+    return { content: `fact #${++n}`, mode: "knowledge" };
+  });
+  movieDetails = vi.fn(async () => {
+    db.events.push("tmdb");
+    return HEAT_DETAILS;
+  });
   deps = {
     clock: { now: () => now },
     openai: openai as unknown as FactServiceDeps["openai"],
     prisma: fakePrisma(db),
     rateLimiter: createRateLimiter({ limit: 1_000, windowMs: 60_000 }),
+    movieDetails: movieDetails as unknown as FactServiceDeps["movieDetails"],
   };
 });
 
@@ -128,18 +166,17 @@ describe("60s cache window", () => {
 // ── Avoid list ────────────────────────────────────────────────────────────────
 
 describe("avoid list", () => {
-  it("is the last 3 facts for this user and this exact title only", async () => {
-    for (let i = 1; i <= 5; i++) seedFact(db, "userA", "Heat", `A heat ${i}`, T0 - 600_000 + i * 1_000);
+  it("is the last 10 facts for this user and this exact title only", async () => {
+    for (let i = 1; i <= 12; i++) seedFact(db, "userA", "Heat", `A heat ${i}`, T0 - 600_000 + i * 1_000);
     seedFact(db, "userA", "heat", "A lowercase title", T0 - 100_000);
     seedFact(db, "userA", "Alien", "A other movie", T0 - 100_000);
     seedFact(db, "userB", "Heat", "B same movie", T0 - 100_000);
 
     await getFactForUser("userA", deps);
 
-    expect(openai).toHaveBeenCalledWith(
-      { title: "Heat", year: 1995 },
-      ["A heat 5", "A heat 4", "A heat 3"],
-      expect.any(AbortSignal),
+    expect(AVOID_COUNT).toBe(10);
+    expect(openai.mock.calls[0][1]).toEqual(
+      Array.from({ length: 10 }, (_, i) => `A heat ${12 - i}`), // newest first: 12 … 3
     );
   });
 });
@@ -147,12 +184,147 @@ describe("avoid list", () => {
 describe("movie year", () => {
   it("passes the stored year to OpenAI", async () => {
     await getFactForUser("userA", deps);
-    expect(openai.mock.calls[0][0]).toEqual({ title: "Heat", year: 1995 });
+    expect(openai.mock.calls[0][0]).toMatchObject({ title: "Heat", year: 1995 });
   });
 
   it("passes year: null for a free-text movie", async () => {
     await getFactForUser("userB", deps);
-    expect(openai.mock.calls[0][0]).toEqual({ title: "Heat", year: null });
+    expect(openai.mock.calls[0][0]).toEqual({
+      title: "Heat",
+      year: null,
+      details: null,
+      today: TODAY,
+      mode: "knowledge",
+      angle: FACT_ANGLES[0],
+    });
+  });
+});
+
+// ── Strategy and angle (chosen in code) ───────────────────────────────────────
+
+describe("fact mode", () => {
+  it("uses knowledge mode for a released film from before the cutoff", async () => {
+    await getFactForUser("userA", deps); // Heat, 1995-12-15, cutoff 2024-06-01
+    expect(openai.mock.calls[0][0].mode).toBe("knowledge");
+  });
+
+  it("uses knowledge mode for a free-text title (no TMDB details)", async () => {
+    await getFactForUser("userB", deps);
+    expect(openai.mock.calls[0][0].mode).toBe("knowledge");
+  });
+
+  it("uses grounded mode for an unreleased film", async () => {
+    movieDetails.mockResolvedValueOnce({ ...HEAT_DETAILS, status: "Post Production", releaseDate: "2026-12-18" });
+    await getFactForUser("userA", deps);
+    expect(openai.mock.calls[0][0].mode).toBe("grounded");
+  });
+
+  it("uses grounded mode for a film released after the configured cutoff", async () => {
+    await getFactForUser("userA", { ...deps, knowledgeCutoff: "1990-01-01" });
+    expect(openai.mock.calls[0][0].mode).toBe("grounded");
+  });
+
+  it("uses knowledge mode when TMDB is unavailable", async () => {
+    movieDetails.mockResolvedValueOnce(null);
+    await getFactForUser("userA", deps);
+    expect(openai.mock.calls[0][0]).toMatchObject({ details: null, mode: "knowledge" });
+  });
+});
+
+describe("angle hint", () => {
+  it.each([0, 1, 6, 7, 15])(
+    "rotates by how many facts the user already has for this movie (%i existing)",
+    async (existing) => {
+      for (let i = 0; i < existing; i++) seedFact(db, "userA", "Heat", `old ${i}`, T0 - 600_000 + i);
+      await getFactForUser("userA", deps);
+      expect(openai.mock.calls[0][0].angle).toBe(FACT_ANGLES[existing % FACT_ANGLES.length]);
+    },
+  );
+
+  it("counts only this user's facts for this exact title", async () => {
+    seedFact(db, "userB", "Heat", "B's", T0 - 600_000);
+    seedFact(db, "userA", "Alien", "other title", T0 - 600_000);
+    await getFactForUser("userA", deps);
+    expect(openai.mock.calls[0][0].angle).toBe(FACT_ANGLES[0]);
+  });
+});
+
+// ── TMDB grounding ────────────────────────────────────────────────────────────
+
+describe("TMDB context", () => {
+  it("fetches details by tmdbId and passes them to OpenAI", async () => {
+    await getFactForUser("userA", deps);
+
+    expect(movieDetails).toHaveBeenCalledWith(949);
+    expect(openai.mock.calls[0][0].details).toEqual(HEAT_DETAILS);
+  });
+
+  it("fetches details before taking the advisory lock", async () => {
+    await getFactForUser("userA", deps);
+    expect(db.events).toEqual(["tmdb", "lock", "openai"]);
+  });
+
+  it("skips the TMDB call for a free-text movie", async () => {
+    await getFactForUser("userB", deps);
+    expect(movieDetails).not.toHaveBeenCalled();
+    expect(db.events).toEqual(["lock", "openai"]);
+  });
+
+  it("skips the TMDB call on a cache hit", async () => {
+    seedFact(db, "userA", "Heat", "fresh", T0 - 10_000);
+    await getFactForUser("userA", deps);
+    expect(movieDetails).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["returns null", () => Promise.resolve(null)],
+    ["throws", () => Promise.reject(new Error("boom"))],
+  ])("still generates when TMDB %s", async (_label, impl) => {
+    movieDetails.mockImplementationOnce(impl);
+
+    const result = await getFactForUser("userA", deps);
+
+    expect(result.stale).toBe(false);
+    expect(openai.mock.calls[0][0]).toMatchObject({ title: "Heat", year: 1995, details: null });
+  });
+});
+
+// ── Stored refusals (written before the safety net existed) ───────────────────
+
+describe("stored refusals", () => {
+  const REFUSAL = "I'm sorry, but I don't have information about that film beyond my training data.";
+
+  it("are not served from the 60s cache", async () => {
+    seedFact(db, "userA", "Heat", REFUSAL, T0 - 5_000);
+
+    const result = await getFactForUser("userA", deps);
+
+    expect(result.fact.content).toBe("fact #1");
+    expect(openai).toHaveBeenCalledTimes(1);
+  });
+
+  it("are not used in the avoid list", async () => {
+    seedFact(db, "userA", "Heat", "real one", T0 - 300_000);
+    seedFact(db, "userA", "Heat", REFUSAL, T0 - 200_000);
+
+    await getFactForUser("userA", deps);
+
+    expect(openai.mock.calls[0][1]).toEqual(["real one"]);
+  });
+
+  it("are skipped by the stale fallback", async () => {
+    const real = seedFact(db, "userA", "Heat", "real one", T0 - 600_000);
+    seedFact(db, "userA", "Heat", REFUSAL, T0 - 300_000);
+    openai.mockRejectedValueOnce(new OpenAiError("refused twice"));
+
+    expect(await getFactForUser("userA", deps)).toEqual({ fact: real, stale: true });
+  });
+
+  it("never become the fallback: UPSTREAM_FAILED when only refusals exist", async () => {
+    seedFact(db, "userA", "Heat", REFUSAL, T0 - 300_000);
+    openai.mockRejectedValueOnce(new OpenAiError("refused twice"));
+
+    await expectAppError(getFactForUser("userA", deps), "UPSTREAM_FAILED");
   });
 });
 

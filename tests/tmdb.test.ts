@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getTrendingPosters, searchMovies } from "@/lib/tmdb";
+import {
+  getTrendingPosters,
+  searchMovies,
+  fetchMovieDetails,
+  createMovieDetailsLoader,
+  MOVIE_DETAILS_TTL_MS,
+  type MovieDetails,
+} from "@/lib/tmdb";
 
 function stubFetch(body: unknown, ok = true) {
   vi.stubGlobal(
@@ -167,5 +174,156 @@ describe("searchMovies", () => {
   it("returns degraded on an unexpected body", async () => {
     stubFetch({ page: 1 });
     await expect(searchMovies("heat")).resolves.toEqual({ results: [], degraded: true });
+  });
+});
+
+// ── Movie details (fact grounding) ──────────────────────────────────────────
+
+describe("fetchMovieDetails", () => {
+  const RAW = {
+    id: 1003596,
+    title: "Avengers: Doomsday",
+    tagline: "  ",
+    overview: "The Avengers face their greatest threat yet.",
+    release_date: "2026-12-18",
+    status: "Post Production",
+    runtime: 0,
+    genres: [{ id: 28, name: "Action" }, { id: 878, name: "Science Fiction" }],
+    production_companies: [{ name: "Marvel Studios" }, { name: "Marvel Studios" }],
+    credits: {
+      cast: [
+        { name: "Chris Hemsworth", character: "Thor", order: 1 },
+        { name: "Robert Downey Jr.", character: "Victor von Doom", order: 0 },
+        { name: "Anthony Mackie", character: "Sam Wilson", order: 2 },
+        { name: "Letitia Wright", character: "Shuri", order: 3 },
+        { name: "Paul Rudd", character: "", order: 4 },
+        { name: "Sixth Person", character: "Extra", order: 5 },
+      ],
+      crew: [
+        { name: "Anthony Russo", job: "Director" },
+        { name: "Joe Russo", job: "Director" },
+        { name: "Kevin Feige", job: "Producer" },
+      ],
+    },
+    keywords: { keywords: [{ name: "superhero" }, { name: "sequel" }, { name: "superhero" }, { name: "based on comic" }] },
+  };
+
+  it("calls /movie/{id} with credits, the Bearer token and a timeout", async () => {
+    stubFetch(RAW);
+
+    await fetchMovieDetails(1003596);
+
+    const [url, init] = vi.mocked(fetch).mock.calls[0] as [URL, RequestInit];
+    expect(url.pathname).toBe("/3/movie/1003596");
+    expect(url.searchParams.get("append_to_response")).toBe("credits,keywords");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer test-bearer-token");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("maps to compact grounding data", async () => {
+    stubFetch(RAW);
+
+    await expect(fetchMovieDetails(1003596)).resolves.toEqual({
+      title: "Avengers: Doomsday",
+      tagline: null, // blank → null
+      overview: "The Avengers face their greatest threat yet.",
+      releaseDate: "2026-12-18",
+      status: "Post Production",
+      runtimeMinutes: null, // 0 = unknown for unreleased films
+      genres: ["Action", "Science Fiction"],
+      directors: ["Anthony Russo", "Joe Russo"],
+      cast: [
+        { name: "Robert Downey Jr.", character: "Victor von Doom" },
+        { name: "Chris Hemsworth", character: "Thor" },
+        { name: "Anthony Mackie", character: "Sam Wilson" },
+        { name: "Letitia Wright", character: "Shuri" },
+        { name: "Paul Rudd", character: null },
+      ],
+      productionCompanies: ["Marvel Studios"],
+      keywords: ["superhero", "sequel", "based on comic"], // de-duplicated
+    });
+  });
+
+  it("handles a film with no credits block", async () => {
+    stubFetch({ id: 1, title: "Tiny Film" });
+    await expect(fetchMovieDetails(1)).resolves.toMatchObject({
+      title: "Tiny Film",
+      directors: [],
+      cast: [],
+      genres: [],
+      keywords: [],
+    });
+  });
+
+  it("returns null without calling TMDB when the key is missing", async () => {
+    delete process.env.TMDB_API_KEY;
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    await expect(fetchMovieDetails(1)).resolves.toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a non-OK status", () => stubFetch({}, false)],
+    ["an unexpected body", () => stubFetch({ status_message: "nope" })],
+    ["a timeout", () => vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new DOMException("t", "TimeoutError")))],
+  ])("returns null on %s", async (_label, setup) => {
+    setup();
+    await expect(fetchMovieDetails(1)).resolves.toBeNull();
+  });
+});
+
+describe("createMovieDetailsLoader (24h cache)", () => {
+  const DETAILS = { title: "Heat" } as unknown as MovieDetails;
+
+  it("caches per tmdbId for 24 hours", async () => {
+    let t = 0;
+    const fetchDetails = vi.fn(async () => DETAILS);
+    const load = createMovieDetailsLoader({ now: () => t, fetchDetails });
+
+    await load(949);
+    t = MOVIE_DETAILS_TTL_MS - 1;
+    await load(949);
+    expect(fetchDetails).toHaveBeenCalledTimes(1);
+
+    t = MOVIE_DETAILS_TTL_MS + 1;
+    await load(949);
+    expect(fetchDetails).toHaveBeenCalledTimes(2);
+
+    await load(11);
+    expect(fetchDetails).toHaveBeenCalledTimes(3);
+  });
+
+  it("shares one in-flight request between concurrent callers", async () => {
+    const fetchDetails = vi.fn(async () => DETAILS);
+    const load = createMovieDetailsLoader({ fetchDetails });
+
+    const results = await Promise.all(Array.from({ length: 10 }, () => load(949)));
+
+    expect(fetchDetails).toHaveBeenCalledTimes(1);
+    expect(results.every((r) => r === DETAILS)).toBe(true);
+  });
+
+  it("does not cache failures", async () => {
+    const fetchDetails = vi.fn().mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("x")).mockResolvedValue(DETAILS);
+    const load = createMovieDetailsLoader({ fetchDetails });
+
+    await expect(load(949)).resolves.toBeNull();
+    await expect(load(949)).resolves.toBeNull();
+    await expect(load(949)).resolves.toBe(DETAILS);
+    await load(949);
+    expect(fetchDetails).toHaveBeenCalledTimes(3);
+  });
+
+  it("evicts the oldest entry past maxEntries", async () => {
+    const fetchDetails = vi.fn(async () => DETAILS);
+    const load = createMovieDetailsLoader({ fetchDetails, maxEntries: 2 });
+
+    await load(1);
+    await load(2);
+    await load(3); // evicts 1
+    await load(2);
+    await load(1);
+    expect(fetchDetails.mock.calls.map((c) => (c as unknown[])[0])).toEqual([1, 2, 3, 1]);
   });
 });

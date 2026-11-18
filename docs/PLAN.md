@@ -12,7 +12,7 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 - Auth.js v5 (`next-auth@beta`), Google provider, Prisma adapter, database sessions
 - Postgres 16 via `docker-compose.yml` for local; `DATABASE_URL` env swappable to Neon/Supabase for Vercel
 - Prisma 5, `prisma migrate dev` for schema evolution
-- OpenAI SDK, `gpt-4o-mini`, **8s total deadline (AbortSignal covering the one retry)** — deliberately set **below** the Postgres `lock_timeout` so a waiting request never times out before the lock holder finishes; retry only on 429 and 5xx (max 1 retry with jitter), `max_tokens` capped (~120), fixed prompt template with movie title passed as **data** (not interpolated instructions) plus a list of recent fact snippets so the model is asked for something different
+- OpenAI SDK, model from `OPENAI_MODEL` (default `gpt-4.1-mini`, non-reasoning chat models only), **8s total deadline (AbortSignal covering the one retry)** — deliberately set **below** the Postgres `lock_timeout` so a waiting request never times out before the lock holder finishes; retry only on 429 and 5xx (max 1 retry with jitter), `max_tokens` capped (~200), fixed prompt template with movie title, year and TMDB details passed as **data** (not interpolated instructions) plus a list of recent fact snippets so the model is asked for something different; refusal-like replies are retried once with a stricter prompt and never stored
 - Vitest + React Testing Library, `node` env for service tests, `jsdom` for component tests, **injectable clock** (`Clock` interface defaulted to `Date.now`) so the 60s window can be advanced in tests without timers
 - **Minimal `proxy.ts` (formerly `middleware.ts`) — UX only, not security** — `proxy.ts` matches `/dashboard/:path*` and `/onboarding/:path*` and redirects to `/` if the Auth.js session cookie is absent. It **does not verify the session** (DB session lookups aren't available in Edge anyway); it only avoids rendering a protected page just to bounce. The real protection stays in server components and route handlers via `auth()`. Auth.js v5 docs explicitly endorse this split: "verify the session as close to your data fetching as possible."
 - **Structured logging via `pino`** — JSON output, redact PII (email), include `userId`, `movieTitle`, request id, and a stable `event` key. Fact-generation events: `fact.cache_hit`, `fact.cache_miss`, `fact.lock_wait_start`, `fact.lock_acquired`, `fact.lock_wait_timeout`, `fact.openai_call`, `fact.openai_fallback`, `fact.stale_served`, `fact.rate_limited`. Each includes `durationMs`.
@@ -31,29 +31,29 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 - [ ] Onboarding: server-trimmed, length-validated favorite movie, stored per-user
 - [ ] Dashboard shows name, email, photo (with initials fallback), favorite movie, logout
 - [ ] `/dashboard` unauthenticated → redirect to `/`
-- [ ] Fact card calls OpenAI, stores each generated fact
+- [x] Fact card calls OpenAI, stores each generated fact
 - [x] Movie search autocomplete at onboarding: `GET /api/movies/search?q=` (auth, Zod 2–100 chars, TMDB server-side, ≤6 results, `{ degraded: true }` on failure, per-user rate limit, `no-store`); accessible combobox reused by the Stage 7 inline edit
 - [x] Movie poster comes from the selected search result: `tmdbId`, `year`, `posterPath` stored on `Movie` at save; shown on dashboard hero card; gradient fallback for free-text titles (TMDB degraded or no match)
 
 **Variant A (backend)**
-- [ ] 60s server cache: return latest fact if `createdAt > now - 60s`, else regenerate (injectable clock, not `Date.now` directly in the service)
-- [ ] Burst protection via blocking `pg_advisory_xact_lock`, **10s `lock_timeout` (> OpenAI deadline)**, 20s Prisma transaction timeout, cache re-check after lock acquire; in-memory `Map` fallback documented for single-instance
-- [ ] OpenAI failure → return most recent stored fact, else `UPSTREAM_FAILED` error
-- [ ] Vitest tests: cache window (clock-advanced), lock behavior (real docker Postgres + mocked OpenAI), authorization scoping
+- [x] 60s server cache: return latest fact if `createdAt > now - 60s`, else regenerate (injectable clock, not `Date.now` directly in the service)
+- [x] Burst protection via blocking `pg_advisory_xact_lock`, **10s `lock_timeout` (> OpenAI deadline)**, 20s Prisma transaction timeout, cache re-check after lock acquire; in-memory `Map` fallback documented for single-instance
+- [x] OpenAI failure → return most recent stored fact, else `UPSTREAM_FAILED` error
+- [x] Vitest tests: cache window (clock-advanced), lock behavior (real docker Postgres + mocked OpenAI), authorization scoping
 
 **Variant B (frontend)**
-- [ ] `GET /api/me`, `PUT /api/me/movie`, `GET /api/fact` with shared typed contracts, all `Cache-Control: no-store`
-- [ ] `lib/api.ts` typed fetch wrapper, normalized error shape
+- [x] `GET /api/me`, `PUT /api/me/movie`, `GET /api/fact` with shared typed contracts, all `Cache-Control: no-store`
+- [x] `lib/api.ts` typed fetch wrapper, normalized error shape
 - [ ] Inline movie edit: Save/Cancel, optimistic update, revert on failure
 - [ ] 30s **in-memory** client cache keyed by `${userId}:${movieTitle}`, cleared on logout and movie change, bypassed by the explicit "New fact" action (which simply skips the client cache — the server still enforces its own 60s window)
 - [ ] Vitest tests: client 401/500 normalization, edit flow optimistic + revert
 
 **Security (all)**
-- [ ] Server-side validation for every mutation
-- [ ] Every query scoped by `userId` from the session (never trust client-supplied ids)
+- [x] Server-side validation for every mutation
+- [x] Every query scoped by `userId` from the session (never trust client-supplied ids)
 - [ ] Secrets (Google, OpenAI, DB) server-only; no `NEXT_PUBLIC_` leaks (enforced by Zod env schema)
 - [ ] Graceful fallback for missing Google name/photo
-- [ ] Per-user rate limit (30 req / 60s) on `/api/fact`
+- [x] Per-user rate limit (30 req / 60s) on `/api/fact`
 - [ ] Zod env validation on startup
 - [ ] Route-level error boundaries + `global-error.tsx`
 - [ ] Structured logging (`pino`) with PII redaction
@@ -67,8 +67,8 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 4. **Dashboard shell** — layout, Sidebar/TopBar, Avatar with initials, MovieHeroCard with poster slot (`PosterImage` — `next/image` from stored path, or gradient film-frame fallback; read-only first), FactCard skeleton, `app/dashboard/error.tsx` + `app/global-error.tsx`
 5. **Fact service (Base)** — `lib/fact-service.ts` with generate-on-request + DB persist, structured log events wired
 6. **Variant A upgrade + movie search** — *(Variant A was built together with Stage 5.)* 60s cache check + blocking advisory lock + OpenAI fallback + per-user rate limit in the same service. **Movie search replaces the planned `fetchPosterPath(title)` lookup:** `searchMovies(query)` in `lib/tmdb.ts` (TMDB `/search/movie`, Bearer token, 3s timeout, never throws, `{ results, degraded }`), `GET /api/movies/search`, `components/MovieSearchCombobox.tsx` in onboarding. The user picks the exact film, so `tmdbId`, `year` and `posterPath` are saved with the title in one write — no guess-the-first-result lookup. Free text is accepted only when TMDB is degraded or has no match (re-checked server-side in the action). The year is passed to the OpenAI prompt.
-7. **Typed API layer (Variant B)** — `/api/me`, `/api/me/movie`, `/api/fact` with shared Zod schemas and `lib/api.ts` client, `Cache-Control: no-store` on all authed responses
-8. **Inline edit + client cache (Variant B)** — optimistic edit (reuses `MovieSearchCombobox` without `name`, via `onSelectionChange`), 30s in-memory client cache, countdown, FactCard error boundary with retry
+7. **Typed API layer (Variant B)** — *(Done.)* `GET /api/me`, `PUT /api/me/movie`, `GET /api/fact` (no query params, so no `?force`) with shared Zod contracts in `lib/validation.ts`. Every route uses `requireUserId()` (`auth()` at the boundary) and `handle()` from `lib/http.ts`: the `{ ok, data | error }` envelope, `Cache-Control: no-store`, `Retry-After` on 429, and unexpected errors logged and returned as a generic 500 `INTERNAL`. Saving goes through `lib/movie-service.ts`, shared with the onboarding action. `lib/api.ts` is the typed browser client: every failure becomes `AppErrorException` with a stable `code`; aborts pass through. The dashboard `FactCard` loads the real fact via `useFact()` (skeleton, error + Try again, stale hint, rate-limit wait, redirect on 401).
+8. **Inline edit + client cache (Variant B)** — optimistic edit (reuses `MovieSearchCombobox` without `name`, via `onSelectionChange`; calls `putMovie`), 30s in-memory client cache inside `useFact()`, "New fact" button + countdown in the `FactCard` footer
 9. **Tests + CI** — Vitest suites + `.github/workflows/ci.yml` (typecheck + lint + tests + Postgres service for lock test)
 10. **Polish + README** — states, focus rings, docs, screenshots, AI-usage note; premium landing page: animated TMDB trending poster wall (`PosterBackground` — 3 marquee rows, `clamp(120px, 11vw, 210px)` poster height, 4-layer overlay, `getTrendingPosters()` with 24 h revalidate), multi-section layout with `ScrollFade` scroll animations, `FactCarousel` (swipe/keyboard/arrow nav), `MockCardPreview`; "Data from TMDB" footer credit on the landing page (conditional on poster data)
 
@@ -88,23 +88,29 @@ The 60s cache lookup is "latest fact for this user **and this movie title**." If
 
 ## OpenAI invocation (fixed-shape prompt)
 
-- System: "You write one-sentence fun facts about a given movie. Keep it factual, PG, under 240 chars. Do not repeat any of the avoid list."
+- System prompt (full text in `lib/fact-prompt.ts`), chosen per request by `chooseFactMode` in code: **knowledge** (free-text title, or released before `MODEL_KNOWLEDGE_CUTOFF`) — use your own knowledge for a surprising behind-the-scenes or trivia fact, TMDB only identifies the film; **grounded** (unreleased, in production, or released after the cutoff) — use only the TMDB data, pick an interesting angle, phrase unreleased films as upcoming, never list credits; every claim must come from the data (overview, tagline, cast, crew, studios, dates, status, genres, keywords) — no filming locations, effects, CGI, budgets, behind-the-scenes events or production troubles unless stated — and thin data means a fact about the premise, cast or franchise tie-in. Grounded mode has its own data-based examples. Both require a genuinely surprising "did you know?" fact of **2–3 sentences (~40–70 words)**, forbid credit lists and plot summaries, forbid refusals / apologies / mentions of training data, include 2 good + 2 bad generic examples, and treat `angle` as a suggestion; `NO_FACT` only if there is no TMDB data and nothing reliable is known.
 - User message is a JSON object (data, not instructions) so the title cannot hijack the prompt:
   ```json
-  { "movie": "<title>", "year": 1995, "avoid": ["<recent fact 1>", "<recent fact 2>", "<recent fact 3>"] }
+  { "movie": "<title>", "year": 1995, "today": "2026-11-18", "angle": "casting", "tmdb": { … }, "avoid": ["<up to 10 recent facts>"] }
   ```
-  `year` is `Movie.year` from the selected TMDB result, or `null` for free-text titles. The system prompt tells the model to stay on that specific film (not a remake with the same title).
-- `max_tokens: 120`, `temperature: 0.8`, single `AbortSignal` with an **8s total deadline** that covers the retry too. **Invariant: OpenAI deadline < Postgres `lock_timeout`** so a waiter always outlasts the holder's OpenAI call.
-- Retry **once**, with jitter (200–500ms), only on HTTP 429 or any 5xx; any other error short-circuits to the fallback.
-- "Avoid" list is the last N (=3) stored facts for `(userId, movieTitle)` — this nudges variety without a hard uniqueness check.
+  `year` is `Movie.year` from the selected TMDB result, or `null` for free-text titles. `tmdb` is `getMovieDetails(tmdbId)` (fetched before the lock, cached 24h), or `null` for free text / TMDB failure.
+- `max_tokens: 200`, `temperature: 0.8`, output trimmed and capped at 450 chars. Single `AbortSignal` with an **8s total deadline** that covers every retry. **Invariant: OpenAI deadline < Postgres `lock_timeout`** so a waiter always outlasts the holder's OpenAI call.
+- Transport retry **once**, with jitter (200–500ms), only on HTTP 429 or any 5xx.
+- Content check: an empty, too-short (< 20 chars) or refusal-like reply is retried **once** with a stricter "use only the provided data" prompt; if that fails too, the service falls back to the latest stored fact (`stale: true`) or `UPSTREAM_FAILED`. A refusal is never stored or shown.
+- "Avoid" list is the last N (=10) stored usable facts for `(userId, movieTitle)` — this nudges variety without a hard uniqueness check. `angle` rotates through 7 topics (behind the scenes, casting, music or score, effects or filming, cultural impact or awards, little-known trivia, source material or franchise) by how many facts the user already has for this movie.
+- In knowledge mode `tmdb` carries only title, release date and directors; in grounded mode the full details. A rejected knowledge-mode reply is retried once in grounded mode when details exist.
 
 ## Tests (concrete)
 
 - `fact-service.test.ts` — **cache window** with a `Clock` fake: generate at t=0, call again at t=59s → no OpenAI call, same content; advance to t=61s → OpenAI called, new row written.
 - `fact-service.test.ts` — **fallback** with OpenAI mock throwing and a prior fact present → returns the prior; with no prior fact → `UPSTREAM_FAILED` error.
 - `fact-lock.test.ts` — **real docker Postgres** (CI boots via `docker compose up -d` or a `pg` test container), mocked OpenAI with a 200ms delay; fire 10 concurrent `Promise.all` requests → exactly one OpenAI call, all requests return the same fact id. This is the only test that touches a real DB; the rest mock Prisma.
-- `fact-authz.test.ts` — seed facts for user A; call the fact route handler with a session for user B → cannot read A's content (query is scoped by `userId` from session, not body/query).
-- `api-client.test.ts` — `fetch` mocked to return 401, 500, and a malformed body → typed `AppError` with correct `code` surfaces in each case.
+- `fact-authz.test.ts` — service level, real Postgres: two users with the same title; A never gets B's facts from the cache, avoid list or fallback.
+- `fact-route-authz.test.ts` — route level, real Postgres: call `GET /api/fact` with a session for user B → never A's content (query is scoped by `userId` from session, not body/query).
+- `api-routes.test.ts` — all three routes: 401, success shape, `no-store`; PUT validation with `fieldErrors`, client `userId` ignored; fact errors 400/429 + `Retry-After`/502; unexpected errors → 500 `INTERNAL` with no internal details.
+- `movie-service.test.ts` — the shared save rules (selection stored; free text only when degraded or no match; TMDB fields cleared).
+- `api-client.test.ts` — `fetch` mocked to return 401, 429, 500, a malformed body, a network error and an abort → typed `AppError` with correct `code` surfaces in each case; aborts pass through.
+- `fact-card.test.tsx` — skeleton → fact, stale hint, error + Try again recovers, rate-limit wait, redirect on 401, one request per mount, abort on unmount.
 - `movie-edit.test.tsx` — RTL: click edit → type → Save; assert optimistic UI change before the mock resolves; make the mock reject → assert revert to previous title and error toast.
 - `rate-limit.test.ts` — 31st request within 60s returns 429 with `retryAfterMs`; after clock advance beyond window, allowed again.
 - `env.test.ts` — missing `OPENAI_API_KEY` → import of `lib/env.ts` throws with a readable message naming the missing key.
@@ -242,27 +248,32 @@ lib/
   openai.ts                    // client + 8s AbortSignal + retry-on-429/5xx
   tmdb.ts                      // server-only: getTrendingPosters() landing wall; searchMovies(q) → { results, degraded }, never throws
   tmdb-image.ts                // client-safe posterUrl(path, size)
-  movie-search-client.ts       // browser fetch for /api/movies/search (Zod-validated)
-  http.ts                      // jsonOk / jsonError envelopes with Cache-Control: no-store
+  http.ts                      // requireUserId(), handle(), jsonOk / jsonError (envelope + no-store)
+  me.ts                        // loadMe(userId) → MeResponse
+  movie-service.ts             // saveMovieForUser(userId, input) — onboarding + PUT /api/me/movie
+  use-fact.ts                  // useFact() hook for FactCard (Stage 8 adds the 30s cache here)
   fact-service.ts              // cache check + lock + generate + fallback + logs
   lock.ts                      // blocking pg_advisory_xact_lock + in-mem fallback
   rate-limit.ts                // per-user sliding window (in-mem; swap for Redis)
   logger.ts                    // pino instance with PII redaction
   clock.ts                     // Clock interface (default Date.now, overridable in tests)
   validation.ts                // Zod schemas shared by routes and client
-  api.ts                       // typed fetch wrapper (Variant B)
+  api.ts                       // typed fetch wrapper: getMe, putMovie, getFact, searchMovies
   errors.ts                    // AppError discriminated union
-  client-cache.ts              // 30s in-memory fact cache (React context)
 prisma/
   schema.prisma
   migrations/
 tests/
   fact-service.test.ts         // cache window (clock fake) + fallback
   fact-lock.test.ts            // concurrency test against docker Postgres
-  fact-authz.test.ts           // user A cannot read user B's fact
+  fact-authz.test.ts           // user A cannot read user B's fact (service, real Postgres)
+  fact-route-authz.test.ts     // same, through GET /api/fact (real Postgres)
+  api-routes.test.ts           // /api/me, /api/me/movie, /api/fact contracts + errors
+  movie-service.test.ts        // shared save rules
+  fact-card.test.tsx           // FactCard states
   rate-limit.test.ts           // sliding window boundaries
   env.test.ts                  // missing env var throws at import
-  api-client.test.ts           // 401/500 normalization
+  api-client.test.ts           // 401/429/500/malformed/network normalization
   movie-edit.test.tsx          // optimistic + revert
   tmdb.test.ts                 // trending wall + searchMovies parsing/degraded
   openai.test.ts               // retry rules, trimming, empty reply, year in prompt
@@ -286,11 +297,11 @@ GET `/api/fact` (response always sent with `Cache-Control: no-store`):
 2. **Rate limit check**: `rateLimit.consume(userId)` — if exceeded, log `fact.rate_limited`, return 429 with `retryAfterMs`.
 3. Load user's current movie title → 400 if none (frontend should have routed to onboarding).
 4. **Cheap pre-check (no lock)**: read latest fact for `(userId, movieTitle)`. If `createdAt > now()-60s`, log `fact.cache_hit`, return immediately — the common path never enters a transaction.
-5. Log `fact.cache_miss`, log `fact.lock_wait_start`, then begin `prisma.$transaction({ timeout: 20_000, maxWait: 5_000 })`:
+5. Log `fact.cache_miss`. If the movie has a `tmdbId`, load TMDB details **before the lock** (3s timeout, 24h cache; failure → `null`). Log `fact.lock_wait_start`, then begin `prisma.$transaction({ timeout: 20_000, maxWait: 5_000 })`:
    - `SET LOCAL lock_timeout = '10s'` — **must exceed the OpenAI 8s deadline** so a waiter always outlasts the holder.
    - `SELECT pg_advisory_xact_lock(hashtext('fact:' || $userId))` — **blocking**; a concurrent writer makes us wait, not spin. On success log `fact.lock_acquired` with `durationMs` = wait time.
    - **Re-check the cache inside the transaction**: read latest fact again. If now < 60s old, log `fact.cache_hit` (post-lock) and return it (the request we waited on just wrote it) — this is the critical correctness step and the main reason burst protection works.
-   - Else log `fact.openai_call`, call OpenAI with the 8s `AbortSignal` deadline and the fixed prompt (movie title + last 3 fact snippets as "avoid these"), retry once on 429/5xx with jitter.
+   - Else log `fact.openai_call`, call OpenAI with the 8s `AbortSignal` deadline and the fixed prompt (mode and angle chosen in code; title, year, TMDB details, last 10 usable facts as "avoid these"), retry once on 429/5xx with jitter, and once on a refusal-like reply (grounded fallback or stricter prompt).
    - INSERT new Fact, return it.
 6. **OpenAI error branch** (inside the locked path): log `fact.openai_fallback`; return the most recent stored fact for `(userId, movieTitle)` if any; else `UPSTREAM_FAILED` (502-shape). Advisory lock auto-releases at transaction end.
 7. **Lock-wait timeout branch** (`55P03 lock_not_available` from Postgres — holder is genuinely stuck or an upstream backpressure event): log `fact.lock_wait_timeout`, exit the transaction, then return the most recent stored fact for `(userId, movieTitle)` even if it is older than 60s. Only if no fact exists at all do we return `UPSTREAM_FAILED`. Serving stale is far better than 500-ing a real user because the guy ahead of them timed out.

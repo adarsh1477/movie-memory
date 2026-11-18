@@ -231,7 +231,7 @@ export default async function DashboardPage() {
                   className="motion-safe:animate-fade-up"
                   style={{ animationDelay: "160ms" }}
                 >
-                  <FactCard movieTitle={displayTitle} />
+                  <FactCard key={movie.title} movieTitle={displayTitle} />
                 </div>
 
               </div>

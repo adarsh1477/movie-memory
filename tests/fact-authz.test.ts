@@ -26,7 +26,7 @@ describe.skipIf(skipPg)("fact authorization (real Postgres)", () => {
     userA = await createUser(prisma, "Heat");
     userB = await createUser(prisma, "Heat");
     createdIds.push(userA.id, userB.id);
-    openai = vi.fn(async () => "fresh fact for A");
+    openai = vi.fn(async () => ({ content: "fresh fact for A", mode: "knowledge" }));
     deps = {
       prisma,
       openai: openai as unknown as FactServiceDeps["openai"],
@@ -62,7 +62,11 @@ describe.skipIf(skipPg)("fact authorization (real Postgres)", () => {
 
     await getFactForUser(userA.id, deps);
 
-    expect(openai).toHaveBeenCalledWith({ title: "Heat", year: null }, ["A one"], expect.any(AbortSignal));
+    expect(openai).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Heat", year: null, details: null }),
+      ["A one"],
+      expect.any(AbortSignal),
+    );
   });
 
   it("falls back to A's own older fact, never B's newer one", async () => {

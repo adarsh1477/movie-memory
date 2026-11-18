@@ -10,7 +10,7 @@ import {
   type KeyboardEvent,
   type Ref,
 } from "react";
-import { fetchMovieSearch, type MovieSearchFn } from "@/lib/movie-search-client";
+import { searchMovies, type MovieSearchFn } from "@/lib/api";
 import { posterUrl } from "@/lib/tmdb-image";
 import { SEARCH_MAX_CHARS, SEARCH_MIN_CHARS, type MovieSearchResult } from "@/lib/validation";
 
@@ -61,7 +61,7 @@ export default function MovieSearchCombobox({
   describedBy,
   onTextChange,
   onSelectionChange,
-  searchFn = fetchMovieSearch,
+  searchFn = searchMovies,
 }: MovieSearchComboboxProps) {
   const [text, setText] = useState(defaultValue);
   const [selection, setSelection] = useState<MovieSearchResult | null>(defaultSelection);
