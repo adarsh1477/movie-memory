@@ -44,3 +44,4 @@ See `docs/UI_SPEC.md` for the dark palette, Inter typography, `rounded-2xl` card
 - Keep answers brief.
 - Read `docs/` instead of re-exploring the repo.
 - Run `pnpm test` after each stage.
+- Never add Co-Authored-By or Claude-Session lines (or any AI attribution trailer) to commit messages or pull request descriptions.
