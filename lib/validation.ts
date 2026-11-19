@@ -113,8 +113,10 @@ export type FactResponse = z.infer<typeof FactResponse>;
 
 // ── Fact history ──────────────────────────────────────────────────────────────
 
-export const HISTORY_DEFAULT_LIMIT = 10;
+export const HISTORY_DEFAULT_LIMIT = 10; // the API's default when ?limit= is omitted
 export const HISTORY_MAX_LIMIT = 50;
+/** What the dashboard asks for: the first page and every "Load more" (sent explicitly). */
+export const HISTORY_PAGE_SIZE = 5;
 
 /** GET /api/facts/history query. Unknown params (e.g. a forged userId) are stripped. */
 export const FactHistoryQuery = z.object({

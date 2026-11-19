@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import FactHistory, { formatRelative } from "@/components/FactHistory";
+import { HISTORY_PAGE_SIZE } from "@/lib/validation";
 import { STORAGE_PREFIX, factCache } from "@/lib/client-cache";
 
 const replace = vi.fn();
@@ -68,7 +69,7 @@ describe("FactHistory states", () => {
     render(<FactHistory latestFactAt={null} />);
 
     expect(screen.getByRole("status", { name: "Loading fact history…" })).toBeTruthy();
-    expect(urls()).toEqual(["/api/facts/history?limit=10"]);
+    expect(urls()).toEqual(["/api/facts/history?limit=5"]);
 
     first.resolve(page([item("f3", 0), item("f2", 2, "Second.", "Alien"), item("f1", 90)], null));
     await flush();
@@ -170,7 +171,30 @@ describe("FactHistory Load more", () => {
     replies(page([item("f1", 0)], "f1"));
     render(<FactHistory latestFactAt={null} />);
     await flush();
-    expect(urls()).toEqual(["/api/facts/history?limit=10"]);
+    expect(urls()).toEqual(["/api/facts/history?limit=5"]);
+  });
+
+  it("uses pages of 5 by default: first 5, then the next 5 per Load more", async () => {
+    expect(HISTORY_PAGE_SIZE).toBe(5);
+    const five = (from: number) => Array.from({ length: 5 }, (_, i) => item(`f${from - i}`, 15 - from + i));
+    replies(page(five(15), "f11"), page(five(10), "f6"), page(five(5), null));
+    render(<FactHistory latestFactAt={null} />);
+    await flush();
+    expect(listItems()).toHaveLength(5);
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await flush();
+    expect(listItems()).toHaveLength(10);
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await flush();
+    expect(listItems()).toHaveLength(15);
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    expect(urls()).toEqual([
+      "/api/facts/history?limit=5",
+      "/api/facts/history?limit=5&cursor=f11",
+      "/api/facts/history?limit=5&cursor=f6",
+    ]);
   });
 });
 

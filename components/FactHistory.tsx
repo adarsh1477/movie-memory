@@ -7,7 +7,7 @@ import { getFactHistory } from "@/lib/api";
 import { factCache } from "@/lib/client-cache";
 import { AppErrorException, type AppError } from "@/lib/errors";
 import { useNow, usePageVisible } from "@/lib/use-page-visible";
-import { HISTORY_DEFAULT_LIMIT, type FactHistoryItem, type FactHistoryResponse } from "@/lib/validation";
+import { HISTORY_PAGE_SIZE, type FactHistoryItem, type FactHistoryResponse } from "@/lib/validation";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -102,7 +102,7 @@ export type FactHistoryProps = {
  * refreshes the first page. It never touches the fact cache or the fact timer, and keeps
  * no state outside the component (nothing survives sign-out or a user switch).
  */
-export default function FactHistory({ latestFactAt, pageSize = HISTORY_DEFAULT_LIMIT }: FactHistoryProps) {
+export default function FactHistory({ latestFactAt, pageSize = HISTORY_PAGE_SIZE }: FactHistoryProps) {
   const router = useRouter();
   const [state, setState] = useState<State>(INITIAL);
   const stateRef = useRef(state);
