@@ -8,6 +8,7 @@ import {
   isUsableFact,
   MAX_FACT_CHARS,
   MAX_TOKENS,
+  FACT_TEMPERATURE,
   OPENAI_MODEL,
   type ChatClient,
   type FactMovie,
@@ -103,7 +104,8 @@ describe("generateFact request", () => {
     expect(body.model).toBe(OPENAI_MODEL);
     expect(OPENAI_MODEL).toBe(DEFAULT_OPENAI_MODEL);
     expect(body.max_tokens).toBe(MAX_TOKENS);
-    expect(body.temperature).toBe(0.8);
+    expect(body.temperature).toBe(FACT_TEMPERATURE);
+    expect(FACT_TEMPERATURE).toBe(0.4);
     expect(body).not.toHaveProperty("reasoning_effort");
     expect(systemOf(create, 0)).toBe(systemPrompt("grounded"));
     expect(userOf(create, 0)).toEqual({
@@ -141,7 +143,7 @@ describe("generateFact request", () => {
   it("sends tmdb: null, year: null and a default angle for a free-text title", async () => {
     const { client, create } = fakeClient(reply(GOOD));
     await generateFact({ title: "Heat", year: null }, [], signal(), client);
-    expect(userOf(create, 0)).toMatchObject({ movie: "Heat", year: null, tmdb: null, angle: FACT_ANGLES[0] });
+    expect(userOf(create, 0)).toMatchObject({ movie: "Heat", year: null, tmdb: null, angle: FACT_ANGLES.knowledge[0] });
     expect(userOf(create, 0).today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 

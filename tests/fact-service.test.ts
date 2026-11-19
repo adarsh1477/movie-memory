@@ -195,7 +195,7 @@ describe("movie year", () => {
       details: null,
       today: TODAY,
       mode: "knowledge",
-      angle: FACT_ANGLES[0],
+      angle: FACT_ANGLES.knowledge[0],
     });
   });
 });
@@ -237,15 +237,29 @@ describe("angle hint", () => {
     async (existing) => {
       for (let i = 0; i < existing; i++) seedFact(db, "userA", "Heat", `old ${i}`, T0 - 600_000 + i);
       await getFactForUser("userA", deps);
-      expect(openai.mock.calls[0][0].angle).toBe(FACT_ANGLES[existing % FACT_ANGLES.length]);
+      expect(openai.mock.calls[0][0].angle).toBe(FACT_ANGLES.knowledge[existing % FACT_ANGLES.knowledge.length]);
     },
   );
+
+  it("uses the mode's angle list: no casting in knowledge mode, casting available in grounded mode", async () => {
+    seedFact(db, "userA", "Heat", "one", T0 - 600_000); // 1 existing fact → second angle
+
+    await getFactForUser("userA", deps); // knowledge (released 1995)
+    expect(openai.mock.calls[0][0]).toMatchObject({ mode: "knowledge", angle: "filming techniques and sets" });
+
+    now = T0 + 120_000;
+    movieDetails.mockResolvedValueOnce({ ...HEAT_DETAILS, status: "In Production", releaseDate: "2027-05-01" });
+    seedFact(db, "userB", "Heat", "b", T0); // unrelated user, doesn't count
+    db.facts = db.facts.filter((f) => f.userId !== "userA" || f.content === "one"); // back to 1 fact for A
+    await getFactForUser("userA", deps); // grounded
+    expect(openai.mock.calls[1][0]).toMatchObject({ mode: "grounded", angle: "casting" });
+  });
 
   it("counts only this user's facts for this exact title", async () => {
     seedFact(db, "userB", "Heat", "B's", T0 - 600_000);
     seedFact(db, "userA", "Alien", "other title", T0 - 600_000);
     await getFactForUser("userA", deps);
-    expect(openai.mock.calls[0][0].angle).toBe(FACT_ANGLES[0]);
+    expect(openai.mock.calls[0][0].angle).toBe(FACT_ANGLES.knowledge[0]);
   });
 });
 

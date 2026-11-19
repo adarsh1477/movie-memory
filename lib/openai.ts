@@ -22,6 +22,13 @@ export const OPENAI_DEADLINE_MS = 8_000;
 export const MAX_TOKENS = 200;
 export const MAX_FACT_CHARS = 450;
 export const MIN_FACT_CHARS = 20;
+/**
+ * Sampling temperature for fact generation. Kept low (0.4) to cut invented trivia:
+ * higher values produce more varied wording but also more confident made-up details
+ * (fake casting stories, wrong numbers). Variety comes from the rotating angle and
+ * the avoid list instead. See docs/DECISIONS.md "Hallucination mitigation".
+ */
+export const FACT_TEMPERATURE = 0.4;
 
 export type FactMovie = {
   title: string;
@@ -76,7 +83,7 @@ export async function generateFact(
     title: movie.title,
     year: movie.year,
     today,
-    angle: movie.angle ?? FACT_ANGLES[0],
+    angle: movie.angle ?? FACT_ANGLES[mode][0],
     details,
     avoid,
   };
@@ -88,7 +95,7 @@ export async function generateFact(
         {
           model: OPENAI_MODEL,
           max_tokens: MAX_TOKENS,
-          temperature: 0.8,
+          temperature: FACT_TEMPERATURE,
           messages: [
             { role: "system", content: system },
             { role: "user", content: buildUserMessage(attemptMode, input) },

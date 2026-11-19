@@ -12,6 +12,7 @@ export async function GET() {
       content: fact.content,
       movieTitle: fact.movieTitle,
       generatedAt: fact.createdAt.toISOString(),
+      serverNow: new Date().toISOString(),
       stale,
     };
     return jsonOk(body);

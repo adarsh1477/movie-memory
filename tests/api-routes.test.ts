@@ -17,6 +17,9 @@ vi.mock("@/lib/fact-service", () => ({ getFactForUser: (...args: unknown[]) => g
 const meRoute = await import("@/app/api/me/route");
 const movieRoute = await import("@/app/api/me/movie/route");
 const factRoute = await import("@/app/api/fact/route");
+const { movieEditRateLimiter, movieSearchRateLimiter, factRateLimiter, MOVIE_EDIT_RATE_LIMIT } = await import(
+  "@/lib/rate-limit"
+);
 
 const UPDATED = new Date("2026-11-18T12:00:00Z");
 const DB_USER = {
@@ -50,6 +53,9 @@ async function expectError(res: Response, status: number, code: string) {
 }
 
 beforeEach(() => {
+  movieEditRateLimiter.reset();
+  movieSearchRateLimiter.reset();
+  factRateLimiter.reset();
   authMock.mockReset().mockResolvedValue({ user: { id: "user-1" } });
   findUnique.mockReset().mockResolvedValue(DB_USER);
   saveMovieMock.mockReset().mockResolvedValue({});
@@ -148,6 +154,44 @@ describe("PUT /api/me/movie", () => {
     expect(saveMovieMock).not.toHaveBeenCalled();
   });
 
+  describe("rate limit (20 per minute per user, own counter)", () => {
+    it("allows 20 saves, then 429 RATE_LIMITED with Retry-After", async () => {
+      expect(MOVIE_EDIT_RATE_LIMIT).toEqual({ limit: 20, windowMs: 60_000 });
+      for (let i = 0; i < 20; i++) expect((await put({ title: "Heat", tmdbId: 949 })).status).toBe(200);
+
+      const res = await put({ title: "Heat", tmdbId: 949 });
+      const error = await expectError(res, 429, "RATE_LIMITED");
+      expect(error.retryAfterMs).toBeGreaterThan(0);
+      expect(Number(res.headers.get("Retry-After"))).toBeGreaterThan(0);
+      expect(saveMovieMock).toHaveBeenCalledTimes(20);
+    });
+
+    it("counts invalid requests too, so junk can't be sent in bulk", async () => {
+      for (let i = 0; i < 20; i++) await put("not json", true);
+      await expectError(await put({ title: "Heat", tmdbId: 949 }), 429, "RATE_LIMITED");
+      expect(saveMovieMock).not.toHaveBeenCalled();
+    });
+
+    it("is per user", async () => {
+      for (let i = 0; i < 20; i++) await put({ title: "Heat", tmdbId: 949 });
+      authMock.mockResolvedValue({ user: { id: "user-2" } });
+      expect((await put({ title: "Heat", tmdbId: 949 })).status).toBe(200);
+    });
+
+    it("doesn't use up the search or fact budgets", async () => {
+      for (let i = 0; i < 21; i++) await put({ title: "Heat", tmdbId: 949 });
+      expect(movieSearchRateLimiter.consume("user-1").ok).toBe(true);
+      expect(factRateLimiter.consume("user-1").ok).toBe(true);
+    });
+
+    it("doesn't count unauthenticated requests against anyone", async () => {
+      authMock.mockResolvedValue(null);
+      for (let i = 0; i < 25; i++) await put({ title: "Heat" });
+      authMock.mockResolvedValue({ user: { id: "user-1" } });
+      expect((await put({ title: "Heat", tmdbId: 949 })).status).toBe(200);
+    });
+  });
+
   it("passes through the service's 'pick from suggestions' error", async () => {
     saveMovieMock.mockRejectedValue(
       new AppErrorException({ code: "VALIDATION", message: "Pick your movie", fieldErrors: { title: "Pick your movie" } }),
@@ -177,9 +221,28 @@ describe("GET /api/fact", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
     expect(await res.json()).toEqual({
       ok: true,
-      data: { content: FACT.content, movieTitle: "Heat", generatedAt: "2026-11-18T12:00:00.000Z", stale: false },
+      data: {
+        content: FACT.content,
+        movieTitle: "Heat",
+        generatedAt: "2026-11-18T12:00:00.000Z",
+        serverNow: expect.any(String),
+        stale: false,
+      },
     });
     expect(getFactMock).toHaveBeenCalledWith("user-1");
+  });
+
+  it("includes serverNow (the server's clock at response time) for client clock correction", async () => {
+    getFactMock.mockResolvedValue({ fact: FACT, stale: false });
+
+    const before = Date.now();
+    const body = await (await factRoute.GET()).json();
+    const after = Date.now();
+
+    const serverNow = Date.parse(body.data.serverNow);
+    expect(body.data.serverNow).toBe(new Date(serverNow).toISOString());
+    expect(serverNow).toBeGreaterThanOrEqual(before);
+    expect(serverNow).toBeLessThanOrEqual(after);
   });
 
   it("passes stale: true through", async () => {

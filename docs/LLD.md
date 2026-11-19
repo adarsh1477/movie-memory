@@ -19,9 +19,9 @@ app/
 components/
   Sidebar.tsx  TopBar.tsx
   Avatar.tsx                     Initials fallback when image missing or 404s
-  MovieHeroCard.tsx              Inline edit (view/edit modes, optimistic Save); contains PosterImage
+  MovieHeroCard.tsx              Client hero: backdrop, poster, title + inline edit (optimistic), FactCard
   PosterImage.tsx                next/image from posterPath or gradient film-frame fallback
-  FactCard.tsx                   useFact() hook, skeleton, countdown, retry
+  FactCard.tsx                   useFact(): skeleton, countdown, auto-swap, New fact, stale / error / saving
   SignInButton.tsx  SignOutButton.tsx
   Skeleton.tsx                   Shared shimmer primitive
   PosterBackground.tsx           Server component; landing page 3-row marquee poster wall
@@ -38,17 +38,18 @@ lib/
   tmdb-image.ts                  Client-safe posterUrl(path, size)
   me.ts                          loadMe(userId) → MeResponse
   movie-service.ts               saveMovieForUser(userId, input) — shared by onboarding + PUT
-  use-fact.ts                    useFact() hook behind FactCard
+  use-fact.ts                    useFact(): client cache, scheduling, auto-load, New fact
+  use-page-visible.ts            usePageVisible(), useNow()
   http.ts                        jsonOk / jsonError envelopes, Cache-Control: no-store
   fact-service.ts                getFactForUser(userId) — the main service
   lock.ts                        withAdvisoryLock(tx, key, fn)
-  rate-limit.ts                  consume(userId): { ok, retryAfterMs }
+  rate-limit.ts                  createRateLimiter(); fact 30/min, search 30/min, movie edit 20/min — separate buckets
   logger.ts                      pino instance, PII redaction, child({event})
   clock.ts                       Clock interface, default implementation
   validation.ts                  Zod schemas (form + API bodies, responses, ApiError)
   api.ts                         Typed client (getMe, putMovie, getFact, searchMovies)
   errors.ts                      AppError discriminated union
-  client-cache.ts                (Stage 8) 30s in-memory fact cache used by useFact()
+  client-cache.ts                30s in-memory fact cache keyed by userId:movieTitle
 prisma/
   schema.prisma
   migrations/
@@ -63,7 +64,8 @@ tests/
   rate-limit.test.ts
   env.test.ts
   api-client.test.ts
-  movie-edit.test.tsx
+  movie-edit.test.tsx            Inline edit: optimistic, revert, cancel, keyboard, free text
+  client-cache.test.ts
   tmdb.test.ts                   getTrendingPosters: success path, missing 'results' key → [], fetch throws → [], absent TMDB_API_KEY → [] (fetch never called), non-OK HTTP status → []
 proxy.ts                         Cookie-presence redirect only
 vitest.setup.ts                  Dummy env vars for test imports
@@ -100,9 +102,13 @@ export type FactMode = 'knowledge' | 'grounded'
 export function chooseFactMode(details: MovieDetails | null | undefined, knowledgeCutoff: string, today: string): FactMode
 // knowledge: no details, or status "Released" AND releaseDate ≤ today AND releaseDate < cutoff.
 // grounded: everything else (unreleased, in production, no date, released on/after cutoff).
-export const FACT_ANGLES  // behind the scenes, casting, music or score, effects or filming,
+export const FACT_ANGLES  // per mode. Both: behind the scenes, music or score, effects or filming,
                           // cultural impact or awards, little-known trivia, source material or franchise
-export function pickAngle(existingFactCount: number): FactAngle   // FACT_ANGLES[count % 7]
+                          // knowledge adds "filming techniques and sets"; grounded adds "casting"
+export function pickAngle(existingFactCount: number, mode: FactMode): FactAngle   // FACT_ANGLES[mode][count % 7]
+export const KNOWLEDGE_ACCURACY_RULE: string  // in both knowledge prompts: widely documented facts only; no casting
+                                              // alternatives / exact quotes / exact numbers or dates / motivations
+                                              // unless fully certain; else a safer well-documented fact
 export function systemPrompt(mode: FactMode): string        // intro + mode block + what-to-write + never-list + 2 good / 2 bad examples (per mode)
 export function strictSystemPrompt(mode: FactMode): string  // retry prompt for the same mode
 export const GROUNDED_SOURCE_RULE: string   // in both grounded prompts: every claim from the TMDB data; no locations /
@@ -120,7 +126,7 @@ export async function generateFact(
     details?: MovieDetails | null   // TMDB data; null for free text or when TMDB failed
     today?: string                  // YYYY-MM-DD, so "upcoming" can be judged
     mode?: FactMode                 // chosen by the caller; default chooseFactMode(…, MODEL_KNOWLEDGE_CUTOFF, today)
-    angle?: FactAngle               // suggested topic; default FACT_ANGLES[0]
+    angle?: FactAngle               // suggested topic; default FACT_ANGLES[mode][0]
   },
   avoid: string[],                  // last 10 usable facts for this user + title
   signal: AbortSignal,              // the whole 8s deadline, covering every retry below
@@ -226,9 +232,73 @@ export const searchMovies: (q: string, signal: AbortSignal) => Promise<MovieSear
 //   server envelope → its code + message      500/HTML/malformed/schema mismatch/network → INTERNAL
 //   AbortError → rethrown untouched
 
+// lib/client-cache.ts (browser)
+export const CLIENT_CACHE_TTL_MS = 30_000
+export type CachedFact = { fact: FactResponse; fetchedAt: number; clockOffsetMs: number }
+export const FACT_WINDOW_MS = 60_000                     // must match the server's CACHE_WINDOW_MS
+export function windowEndsAt(fact, clockOffsetMs): number // generatedAt + 60s, in browser time
+export function cacheExpiresAt(entry, ttlMs?): number     // min(fetchedAt + 30s, windowEndsAt(...))
+export const STORAGE_PREFIX = "movie-memory:fact:v1:"
+export function storageKeyOf(userId, movieTitle): string   // prefix + encodeURIComponent(userId) + ":" + encodeURIComponent(title)
+export type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length">
+export function browserSessionStorage(): StorageLike | null   // null on the server or when access throws
+export function createFactCache(opts?: { ttlMs?; storage?: () => StorageLike | null }): {
+  get(userId, movieTitle, now?): CachedFact | null    // memory, then storage (Zod-validated); null and dropped
+                                                      // once now ≥ cacheExpiresAt(entry) or if malformed
+  set(userId, movieTitle, entry: CachedFact): void    // memory + storage
+  deleteMovie(userId, movieTitle): void                // after a movie edit (memory + storage)
+  clear(): void                                        // sign-out / 401: memory + all prefixed storage keys
+}
+// Stored value: { v: 1, userId, movieTitle, fact: FactResponse, fetchedAt, clockOffsetMs }.
+// All storage access is try/catch → memory-only fallback; nothing is logged.
+export const factCache   // the per-tab instance, backed by sessionStorage
+
 // lib/use-fact.ts (browser)
-export function useFact(options: { onUnauthorized: () => void }):
-  { status: 'loading' | 'ready' | 'error'; fact: FactResponse | null; error: AppError | null; retry(): void }
+export function useFact(options: {
+  userId: string; movieTitle: string          // exact stored title: cache key
+  onUnauthorized: () => void
+  paused?: boolean                            // hold loads while a movie edit is saving
+  cache?: FactCache; now?: () => number       // injectable for tests
+}): {
+  status: 'loading' | 'ready' | 'error'       // error = no fact and the last load failed
+  fact: FactResponse | null                   // kept on screen while refreshing / after a failed refresh
+  error: AppError | null                      // with a fact present: "showing the last fact"
+  refreshing: boolean                         // auto or "New fact" load in flight
+  nextAt: number | null                       // browser ms of the next automatic load
+  sameFactWaitMs: number | null               // "New fact" got the same fact: ms until a fresh one
+  clockOffsetMs: number                       // serverNow − browser time at receipt
+  fallback: FactResponse | null               // expired fact held off screen during a late load
+  manual: boolean                             // the load in flight was user-started
+  newFact(): void                             // skips the client cache; replaces a slow auto load
+  retry(): void                               // same as newFact
+// The cache is read in a layout effect on mount (hydration-safe, before paint).
+}
+// nextAt = generatedAt + 60s − clockOffsetMs + 250ms; stale or failed → now + 30s
+// (429 → now + retryAfterMs); same fact on an auto-load → at least now + 5s.
+// The timer runs only while the tab is visible; becoming visible resyncs. One timer at a
+// time, cleared and rescheduled on every new fact; auto-loads never read the client cache.
+// A load more than LATE_LOAD_MS (1s) overdue hides an expired, unlabelled fact (skeleton)
+// and keeps it as `fallback`, shown again with the stale hint only if that load fails.
+
+// lib/use-page-visible.ts (browser)
+export function usePageVisible(): boolean
+export function useNow(active: boolean, intervalMs?: number, resyncKey?: unknown): number
+
+// components/FactCard.tsx
+export default function FactCard(props: {
+  userId: string; movieTitle: string; displayTitle?: string; pending?: boolean
+})
+export function formatCountdown(ms: number): string   // 47_000 → "0:47"
+export const OVERDUE_GRACE_MS = 2_000                  // "New fact" appears this long after 0:00 with no new fact
+// Action button: "Try again" after a failed load; "New fact" on a stale fallback or when
+// overdue; otherwise none.
+
+// components/MovieHeroCard.tsx (client)
+export default function MovieHeroCard(props: {
+  userId: string
+  movie: { title: string; tmdbId: number | null; year: number | null; posterPath: string | null }
+})
+// committed (server-confirmed) vs optimistic movie; FactCard keyed by committed.title.
 ```
 
 ## AppError discriminated union
@@ -282,6 +352,7 @@ export const FactResponse = z.object({
   content:     z.string(),
   movieTitle:  z.string(),          // the title this fact was generated for
   generatedAt: z.string(),          // ISO
+  serverNow:   z.string(),          // ISO server time at response; client clock correction
   stale:       z.boolean(),
 })
 export type FactResponse = z.infer<typeof FactResponse>
@@ -302,7 +373,7 @@ export type Envelope<T> = { ok: true; data: T } | { ok: false; error: ApiError }
 | Method | Path            | Request                   | Success                                 | Errors                                      |
 |-------:|-----------------|---------------------------|-----------------------------------------|---------------------------------------------|
 | GET    | `/api/me`       | (none)                    | `Envelope<MeResponse>`                  | 401                                         |
-| PUT    | `/api/me/movie` | `MoviePutBody` (JSON)     | `Envelope<MeResponse>`                  | 401, 400 (VALIDATION + `fieldErrors`; non-JSON body; free text when TMDB has matches) |
+| PUT    | `/api/me/movie` | `MoviePutBody` (JSON)     | `Envelope<MeResponse>`                  | 401, 429 + `Retry-After` (20/min per user, counted before the body is read), 400 (VALIDATION + `fieldErrors`; non-JSON body; free text when TMDB has matches) |
 | GET    | `/api/fact`     | (none — no `?force`)      | `Envelope<FactResponse>`                | 401, 400 (NO_MOVIE), 429 + `Retry-After`, 502 |
 | GET    | `/api/movies/search` | `?q=` (trim, 2–100)  | `Envelope<MovieSearchResponse>` (`degraded: true` when TMDB fails) | 401, 400 (VALIDATION), 429 |
 
@@ -313,7 +384,8 @@ All authed responses: `Cache-Control: no-store`.
 - `lib/env.ts` — fail-fast env check at import; exports typed `env` object.
 - `lib/auth.ts` — Auth.js v5 config with Google provider + Prisma adapter + DB sessions; exports `auth`, `handlers`, `signIn`, `signOut`.
 - `lib/prisma.ts` — single `PrismaClient` across hot reloads.
-- `lib/fact-prompt.ts` — pure prompt building: `chooseFactMode` (the knowledge vs grounded decision), `pickAngle`, `systemPrompt` / `strictSystemPrompt` per mode (with the good/bad examples), `buildUserMessage`. No network or env, so it is unit-tested directly.
+- `lib/fact-prompt.ts` — pure prompt building: `chooseFactMode` (the knowledge vs grounded decision), `pickAngle` (per-mode angle lists), `systemPrompt` / `strictSystemPrompt` per mode (with the good/bad examples, `KNOWLEDGE_ACCURACY_RULE` and `GROUNDED_SOURCE_RULE`), `buildUserMessage`. No network or env, so it is unit-tested directly.
+- `lib/openai.ts` constants: `FACT_TEMPERATURE = 0.4`, `MAX_TOKENS = 200`, `MAX_FACT_CHARS = 450`, `MIN_FACT_CHARS = 20`, `OPENAI_DEADLINE_MS = 8000`.
 - `lib/openai.ts` — `generateFact(movie, avoid, signal)`: sends `systemPrompt(mode)` + `buildUserMessage(mode, …)` to `env.OPENAI_MODEL`, retries once on 429/5xx, retries once on an unusable reply (grounded fallback or strict prompt), never returns a refusal, and reports which mode produced the fact. Also exports `looksLikeRefusal` and `cleanFact`. No database access.
 - `lib/tmdb.ts` — server-only (Bearer token). `getTrendingPosters()`: TMDB `/trending/movie/day`, `next: { revalidate: 86400 }`, `AbortSignal.timeout(3000)`; `string[]` of poster paths, `[]` on any failure. `searchMovies(q)`: `/search/movie`, same auth/timeout, `cache: "no-store"`, ≤6 Zod-validated results, `{ degraded: true }` on any failure. `getMovieDetails(tmdbId)`: `/movie/{id}?append_to_response=credits,keywords`, same auth/timeout, compact `MovieDetails` (overview, tagline, release date, status, runtime, genres, directors, top 5 cast, studios, up to 10 keywords), 24h in-memory cache per id with shared in-flight requests, `null` on any failure. Re-exports `posterUrl` from `lib/tmdb-image.ts`, which client components import instead.
 - `components/MovieSearchCombobox.tsx` — WAI-ARIA combobox: 300ms debounce, `AbortController` per request, arrows/Enter/Escape, loading/no-results/degraded states. With `name`, renders hidden `tmdbId`/`year`/`posterPath` inputs for a server action; without it, reports via `onSelectionChange` (Stage 7 inline edit).
@@ -327,6 +399,8 @@ All authed responses: `Cache-Control: no-store`.
 - `lib/me.ts` — `loadMe(userId)`: the one place that shapes `MeResponse`.
 - `lib/movie-service.ts` — `saveMovieForUser`: the save rules shared by the onboarding server action and `PUT /api/me/movie`.
 - `lib/api.ts` — typed `fetch` wrapper; validates the `Envelope<T>` with the route's Zod schema; turns every failure into `AppErrorException` with a stable `code`; lets aborts through.
-- `lib/use-fact.ts` — `useFact()`: loads `/api/fact`, keeps the last fact while retrying, calls `onUnauthorized` on 401. Remount (the dashboard keys `FactCard` by movie title) to reset.
+- `lib/use-fact.ts` — `useFact()`: renders a client-cache hit with no request; otherwise loads `/api/fact`. Schedules the next load at the end of the server's 60s window using `serverNow` for clock correction, only while the tab is visible; keeps the last fact on failure and retries after 30s; `newFact()` skips only the client cache. Calls `onUnauthorized` on 401. Remount (`MovieHeroCard` keys `FactCard` by the confirmed movie title) to switch movies.
+- `lib/use-page-visible.ts` — `usePageVisible()` (Page Visibility API as state) and `useNow()` (a 1s clock that only ticks while active and resyncs on a new target).
+- `components/MovieHeroCard.tsx` — the dashboard hero as a client component, so an edit can update title, year, poster and backdrop optimistically. Saves via `putMovie`; reverts and shows the server message on failure; drops the old title's cache entry on success; returns focus to the pencil.
 - `lib/errors.ts` — the union above.
-- `lib/client-cache.ts` (Stage 8) — `Map<string, { fact, generatedAt, stale }>` keyed by `userId:movieTitle`, read and written by `useFact()`.
+- `lib/client-cache.ts` — `Map<string, { fact, fetchedAt, clockOffsetMs }>` keyed by `userId:movieTitle`; a hit only while `now < min(fetchedAt + 30s, generatedAt + 60s)` with server-clock correction, so it can never return a fact past its server window (and never a `stale: true` one); mirrored to sessionStorage (Zod-validated on read, all access try/catch, memory-only fallback, no logging) so it survives a reload in the same tab; read and written by `useFact()`, cleared on sign-out (`DashboardNav`) and on a 401 (`FactCard`), and per movie on edit.

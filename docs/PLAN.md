@@ -44,9 +44,9 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 **Variant B (frontend)**
 - [x] `GET /api/me`, `PUT /api/me/movie`, `GET /api/fact` with shared typed contracts, all `Cache-Control: no-store`
 - [x] `lib/api.ts` typed fetch wrapper, normalized error shape
-- [ ] Inline movie edit: Save/Cancel, optimistic update, revert on failure
-- [ ] 30s **in-memory** client cache keyed by `${userId}:${movieTitle}`, cleared on logout and movie change, bypassed by the explicit "New fact" action (which simply skips the client cache — the server still enforces its own 60s window)
-- [ ] Vitest tests: client 401/500 normalization, edit flow optimistic + revert
+- [x] Inline movie edit: Save/Cancel, optimistic update, revert on failure
+- [x] 30s **in-memory** client cache keyed by `${userId}:${movieTitle}`, cleared on logout and movie change, bypassed by the explicit "New fact" action (which simply skips the client cache — the server still enforces its own 60s window)
+- [x] Vitest tests: client 401/500 normalization, edit flow optimistic + revert
 
 **Security (all)**
 - [x] Server-side validation for every mutation
@@ -68,7 +68,7 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 5. **Fact service (Base)** — `lib/fact-service.ts` with generate-on-request + DB persist, structured log events wired
 6. **Variant A upgrade + movie search** — *(Variant A was built together with Stage 5.)* 60s cache check + blocking advisory lock + OpenAI fallback + per-user rate limit in the same service. **Movie search replaces the planned `fetchPosterPath(title)` lookup:** `searchMovies(query)` in `lib/tmdb.ts` (TMDB `/search/movie`, Bearer token, 3s timeout, never throws, `{ results, degraded }`), `GET /api/movies/search`, `components/MovieSearchCombobox.tsx` in onboarding. The user picks the exact film, so `tmdbId`, `year` and `posterPath` are saved with the title in one write — no guess-the-first-result lookup. Free text is accepted only when TMDB is degraded or has no match (re-checked server-side in the action). The year is passed to the OpenAI prompt.
 7. **Typed API layer (Variant B)** — *(Done.)* `GET /api/me`, `PUT /api/me/movie`, `GET /api/fact` (no query params, so no `?force`) with shared Zod contracts in `lib/validation.ts`. Every route uses `requireUserId()` (`auth()` at the boundary) and `handle()` from `lib/http.ts`: the `{ ok, data | error }` envelope, `Cache-Control: no-store`, `Retry-After` on 429, and unexpected errors logged and returned as a generic 500 `INTERNAL`. Saving goes through `lib/movie-service.ts`, shared with the onboarding action. `lib/api.ts` is the typed browser client: every failure becomes `AppErrorException` with a stable `code`; aborts pass through. The dashboard `FactCard` loads the real fact via `useFact()` (skeleton, error + Try again, stale hint, rate-limit wait, redirect on 401).
-8. **Inline edit + client cache (Variant B)** — optimistic edit (reuses `MovieSearchCombobox` without `name`, via `onSelectionChange`; calls `putMovie`), 30s in-memory client cache inside `useFact()`, "New fact" button + countdown in the `FactCard` footer
+8. **Inline edit + client cache (Variant B)** — *(Done.)* `MovieHeroCard` is now the client-side dashboard hero (backdrop, poster, title, FactCard). The pencil opens `MovieSearchCombobox` (no `name`, via `onSelectionChange`); picking a result calls `putMovie` with an optimistic title / year / poster that reverts with the server's message on failure; free text goes through the same server rule as onboarding; Cancel or Escape exits; focus returns to the pencil. The FactCard follows only the server-confirmed movie (it shows a saving skeleton meanwhile). `lib/client-cache.ts`: 30s in-memory cache keyed by `userId:movieTitle`, cleared on sign-out and per movie on edit. `useFact()`: cache hit with no request, "New fact" (skips only the client cache; inside the 60s window the server returns the same fact and the card says when a fresh one is possible), countdown to `generatedAt + 60s` corrected by `serverNow`, auto-load at 0:00 only while the tab is visible (resync on return), 30s retry with the stale hint on failure, a 5s backoff if the same fact comes back. `PUT /api/me/movie` rate limited to 20/min per user (own counter).
 9. **Tests + CI** — Vitest suites + `.github/workflows/ci.yml` (typecheck + lint + tests + Postgres service for lock test)
 10. **Polish + README** — states, focus rings, docs, screenshots, AI-usage note; premium landing page: animated TMDB trending poster wall (`PosterBackground` — 3 marquee rows, `clamp(120px, 11vw, 210px)` poster height, 4-layer overlay, `getTrendingPosters()` with 24 h revalidate), multi-section layout with `ScrollFade` scroll animations, `FactCarousel` (swipe/keyboard/arrow nav), `MockCardPreview`; "Data from TMDB" footer credit on the landing page (conditional on poster data)
 
@@ -94,10 +94,10 @@ The 60s cache lookup is "latest fact for this user **and this movie title**." If
   { "movie": "<title>", "year": 1995, "today": "2026-11-18", "angle": "casting", "tmdb": { … }, "avoid": ["<up to 10 recent facts>"] }
   ```
   `year` is `Movie.year` from the selected TMDB result, or `null` for free-text titles. `tmdb` is `getMovieDetails(tmdbId)` (fetched before the lock, cached 24h), or `null` for free text / TMDB failure.
-- `max_tokens: 200`, `temperature: 0.8`, output trimmed and capped at 450 chars. Single `AbortSignal` with an **8s total deadline** that covers every retry. **Invariant: OpenAI deadline < Postgres `lock_timeout`** so a waiter always outlasts the holder's OpenAI call.
+- `max_tokens: 200`, `temperature: 0.4` (`FACT_TEMPERATURE`, kept low to cut invented trivia), output trimmed and capped at 450 chars. Single `AbortSignal` with an **8s total deadline** that covers every retry. **Invariant: OpenAI deadline < Postgres `lock_timeout`** so a waiter always outlasts the holder's OpenAI call.
 - Transport retry **once**, with jitter (200–500ms), only on HTTP 429 or any 5xx.
 - Content check: an empty, too-short (< 20 chars) or refusal-like reply is retried **once** with a stricter "use only the provided data" prompt; if that fails too, the service falls back to the latest stored fact (`stale: true`) or `UPSTREAM_FAILED`. A refusal is never stored or shown.
-- "Avoid" list is the last N (=10) stored usable facts for `(userId, movieTitle)` — this nudges variety without a hard uniqueness check. `angle` rotates through 7 topics (behind the scenes, casting, music or score, effects or filming, cultural impact or awards, little-known trivia, source material or franchise) by how many facts the user already has for this movie.
+- "Avoid" list is the last N (=10) stored usable facts for `(userId, movieTitle)` — this nudges variety without a hard uniqueness check. `angle` rotates through 7 topics by how many facts the user already has for this movie: behind the scenes, music or score, effects or filming, cultural impact or awards, little-known trivia, source material or franchise, plus **filming techniques and sets** in knowledge mode or **casting** in grounded mode (where the cast comes from the data). Knowledge mode also carries an accuracy rule: only widely documented facts; no casting alternatives, exact quotes, exact numbers or dates, or personal motivations unless fully certain.
 - In knowledge mode `tmdb` carries only title, release date and directors; in grounded mode the full details. A rejected knowledge-mode reply is retried once in grounded mode when details exist.
 
 ## Tests (concrete)
@@ -111,7 +111,9 @@ The 60s cache lookup is "latest fact for this user **and this movie title**." If
 - `movie-service.test.ts` — the shared save rules (selection stored; free text only when degraded or no match; TMDB fields cleared).
 - `api-client.test.ts` — `fetch` mocked to return 401, 429, 500, a malformed body, a network error and an abort → typed `AppError` with correct `code` surfaces in each case; aborts pass through.
 - `fact-card.test.tsx` — skeleton → fact, stale hint, error + Try again recovers, rate-limit wait, redirect on 401, one request per mount, abort on unmount.
-- `movie-edit.test.tsx` — RTL: click edit → type → Save; assert optimistic UI change before the mock resolves; make the mock reject → assert revert to previous title and error toast.
+- `movie-edit.test.tsx` — RTL: pencil → combobox focused and prefilled; picking a result shows the new title, year and poster before the PUT resolves (no fact request until it does); failure reverts with the server's message; Cancel / Escape (after closing the list) exit without saving; arrows + Enter save; free text sent without TMDB fields; focus back on the pencil; old cache entry dropped.
+- `client-cache.test.ts` — hit within 30s, expiry at 30s, keyed by user and exact title, `deleteMovie`, `clear`.
+- `fact-card.test.tsx` (fake timers) — cache hit with no request, expiry, countdown to `generatedAt + 60s` using `serverNow`, auto-swap at 0:00, paused while hidden and resynced on return, failure keeps the fact with the stale hint and retries in 30s, no loop on the same fact, "New fact" inside the window shows a hint (not an error), disabled while in flight.
 - `rate-limit.test.ts` — 31st request within 60s returns 429 with `retryAfterMs`; after clock advance beyond window, allowed again.
 - `env.test.ts` — missing `OPENAI_API_KEY` → import of `lib/env.ts` throws with a readable message naming the missing key.
 - `tmdb.test.ts` — covers `getTrendingPosters` (the landing page wall function): (a) successful response with mixed null/non-null `poster_path` → returns only the non-null strings; (b) unexpected response shape (missing `results` key) → returns `[]`; (c) `fetch` rejects (network error) → returns `[]`; (d) `TMDB_API_KEY` absent → returns `[]` and `fetch` is never called; (e) non-OK HTTP status (500) → returns `[]`. All cases use `vi.stubGlobal('fetch', ...)`; none hit the real TMDB API. Also covers `searchMovies`: Bearer header + encoded query + timeout signal; mapping to `{tmdbId, title, year, posterPath}`; max 6; null year/poster; unsafe poster path dropped; malformed items skipped; missing key / non-OK / throw / bad body → `degraded: true`.
@@ -232,10 +234,10 @@ app/
 components/
   Sidebar.tsx  TopBar.tsx
   Avatar.tsx                   // initials fallback
-  MovieHeroCard.tsx            // inline edit
+  MovieHeroCard.tsx            // client hero: backdrop, poster, inline edit (optimistic), FactCard
   MovieSearchCombobox.tsx      // accessible TMDB autocomplete (onboarding + inline edit)
   PosterImage.tsx              // next/image from posterPath or gradient film-frame fallback
-  FactCard.tsx                 // countdown + New fact
+  FactCard.tsx                 // countdown, auto-swap, New fact, stale / error / saving states
   Skeleton.tsx  SignInButton.tsx
   PosterBackground.tsx         // server — landing page 3-row marquee poster wall
   ScrollFade.tsx               // client — IntersectionObserver fade-in wrapper
@@ -251,7 +253,9 @@ lib/
   http.ts                      // requireUserId(), handle(), jsonOk / jsonError (envelope + no-store)
   me.ts                        // loadMe(userId) → MeResponse
   movie-service.ts             // saveMovieForUser(userId, input) — onboarding + PUT /api/me/movie
-  use-fact.ts                  // useFact() hook for FactCard (Stage 8 adds the 30s cache here)
+  use-fact.ts                  // useFact(): client cache, scheduling, auto-load, New fact
+  use-page-visible.ts          // usePageVisible(), useNow() (Page Visibility API)
+  client-cache.ts              // 30s in-memory fact cache keyed by userId:movieTitle
   fact-service.ts              // cache check + lock + generate + fallback + logs
   lock.ts                      // blocking pg_advisory_xact_lock + in-mem fallback
   rate-limit.ts                // per-user sliding window (in-mem; swap for Redis)
@@ -274,7 +278,8 @@ tests/
   rate-limit.test.ts           // sliding window boundaries
   env.test.ts                  // missing env var throws at import
   api-client.test.ts           // 401/429/500/malformed/network normalization
-  movie-edit.test.tsx          // optimistic + revert
+  movie-edit.test.tsx          // optimistic + revert, cancel, keyboard, free text
+  client-cache.test.ts         // 30s cache
   tmdb.test.ts                 // trending wall + searchMovies parsing/degraded
   openai.test.ts               // retry rules, trimming, empty reply, year in prompt
   movie-search-route.test.ts   // auth, q validation, rate limit, degraded, no-store

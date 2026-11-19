@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Avatar from "./Avatar";
 import Logo from "./Logo";
 import { signOutAction } from "@/lib/auth-actions";
+import { factCache } from "@/lib/client-cache";
 
 type UserProps = {
   name: string | null;
@@ -125,7 +126,8 @@ export default function DashboardNav({ user }: { user: UserProps }) {
 
               {/* Sign out */}
               <div className="p-1.5">
-                <form action={signOutAction}>
+                {/* Sign-out is a soft navigation, so the in-memory fact cache would survive it. */}
+                <form action={signOutAction} onSubmit={() => factCache.clear("logout")}>
                   <button
                     type="submit"
                     role="menuitem"

@@ -3,7 +3,13 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { getFact, getMe, putMovie, searchMovies, NETWORK_ERROR_MESSAGE } from "@/lib/api";
 import { AppErrorException } from "@/lib/errors";
 
-const FACT = { content: "A fact.", movieTitle: "Heat", generatedAt: "2026-11-18T12:00:00.000Z", stale: false };
+const FACT = {
+  content: "A fact.",
+  movieTitle: "Heat",
+  generatedAt: "2026-11-18T12:00:00.000Z",
+  serverNow: "2026-11-18T12:00:05.000Z",
+  stale: false,
+};
 
 function respond(status: number, body: unknown, headers: Record<string, string> = {}) {
   const text = typeof body === "string" ? body : JSON.stringify(body);

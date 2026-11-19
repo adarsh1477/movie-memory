@@ -104,6 +104,9 @@ export const FactResponse = z.object({
   content: z.string(),
   movieTitle: z.string(),
   generatedAt: z.string(), // ISO
+  // ISO server time when the response was built. The client uses it to correct for its
+  // own clock drift, so the countdown to generatedAt + 60s matches the server's window.
+  serverNow: z.string(),
   stale: z.boolean(),
 });
 export type FactResponse = z.infer<typeof FactResponse>;

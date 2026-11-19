@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import {
   FACT_ANGLES,
   GROUNDED_SOURCE_RULE,
+  KNOWLEDGE_ACCURACY_RULE,
   buildUserMessage,
   chooseFactMode,
   pickAngle,
@@ -63,8 +64,21 @@ describe("chooseFactMode", () => {
 // ── pickAngle ─────────────────────────────────────────────────────────────────
 
 describe("pickAngle", () => {
-  it("offers the seven requested angles", () => {
-    expect(FACT_ANGLES).toEqual([
+  it("knowledge mode: no casting angle; filming techniques and sets instead", () => {
+    expect(FACT_ANGLES.knowledge).toEqual([
+      "behind the scenes",
+      "filming techniques and sets",
+      "music or score",
+      "effects or filming",
+      "cultural impact or awards",
+      "little-known trivia",
+      "source material or franchise",
+    ]);
+    expect(FACT_ANGLES.knowledge).not.toContain("casting");
+  });
+
+  it("grounded mode keeps the casting angle (the cast comes from TMDB data)", () => {
+    expect(FACT_ANGLES.grounded).toEqual([
       "behind the scenes",
       "casting",
       "music or score",
@@ -75,15 +89,19 @@ describe("pickAngle", () => {
     ]);
   });
 
-  it("rotates through every angle, then wraps", () => {
-    const picks = Array.from({ length: 14 }, (_, n) => pickAngle(n));
-    expect(picks.slice(0, 7)).toEqual([...FACT_ANGLES]);
-    expect(picks.slice(7)).toEqual([...FACT_ANGLES]);
+  it.each(["knowledge", "grounded"] as const)("%s: rotates through every angle, then wraps", (mode) => {
+    const picks = Array.from({ length: 14 }, (_, n) => pickAngle(n, mode));
+    expect(picks.slice(0, 7)).toEqual([...FACT_ANGLES[mode]]);
+    expect(picks.slice(7)).toEqual([...FACT_ANGLES[mode]]);
+  });
+
+  it("never picks casting in knowledge mode, whatever the count", () => {
+    for (let n = 0; n < 50; n++) expect(pickAngle(n, "knowledge")).not.toBe("casting");
   });
 
   it("is safe for odd counts", () => {
-    expect(pickAngle(-3)).toBe(FACT_ANGLES[0]);
-    expect(pickAngle(2.9)).toBe(FACT_ANGLES[2]);
+    expect(pickAngle(-3, "knowledge")).toBe(FACT_ANGLES.knowledge[0]);
+    expect(pickAngle(2.9, "grounded")).toBe(FACT_ANGLES.grounded[2]);
   });
 });
 
@@ -96,12 +114,13 @@ describe("systemPrompt", () => {
     expect(p).toMatch(/2 to 3 sentences, about 40 to 70 words/);
   });
 
-  it("knowledge: lists the behind-the-scenes topics to draw on", () => {
+  it("knowledge: lists the behind-the-scenes topics to draw on (no casting stories)", () => {
     const p = systemPrompt("knowledge");
+    expect(p).not.toContain("casting stories");
     for (const topic of [
       "behind-the-scenes",
       "production challenges",
-      "casting stories",
+      "filming techniques and sets",
       "filming locations",
       "visual effects",
       "music",
@@ -122,12 +141,64 @@ describe("systemPrompt", () => {
     expect(p).toMatch(/Refuse, apologize, hedge, or mention training data, knowledge cutoffs/);
   });
 
-  it.each(["knowledge", "grounded"] as const)("%s: includes 2 good and 2 bad generic examples", (mode) => {
+  it.each([
+    ["knowledge", 3],
+    ["grounded", 2],
+  ] as const)("%s: includes 2 good and %i bad generic examples", (mode, bad) => {
     const p = systemPrompt(mode);
     expect(p.match(/^Good\b/gm)).toHaveLength(2);
-    expect(p.match(/^Bad \(/gm)).toHaveLength(2);
+    expect(p.match(/^Bad \(/gm)).toHaveLength(bad);
     expect(p).toContain('"X, directed by Y and starring Z, runs 150 minutes."');
     expect(p).toMatch(/never reuse them/);
+  });
+
+  it.each(["knowledge", "grounded"] as const)("%s: no good example involves a casting alternative", (mode) => {
+    const good = systemPrompt(mode)
+      .split("\n")
+      .reduce<string[]>((acc, line) => {
+        if (/^Good\b/.test(line)) acc.push(line);
+        else if (/^\s{2}\S/.test(line) && acc.length && !/^Bad/.test(line)) acc[acc.length - 1] += line;
+        return acc;
+      }, [])
+      .join(" ");
+    expect(good).not.toMatch(/first choice|turned (it|the role) down|auditioned|was considered|almost cast|originally cast/i);
+  });
+
+  // ── Knowledge accuracy rule ───────────────────────────────────────────────
+
+  describe("knowledge accuracy rule", () => {
+    const flat = (s: string) => s.replace(/\n/g, " ");
+
+    it("is in the knowledge prompt and the knowledge retry prompt, not in grounded", () => {
+      expect(systemPrompt("knowledge")).toContain(KNOWLEDGE_ACCURACY_RULE);
+      expect(strictSystemPrompt("knowledge")).toContain(KNOWLEDGE_ACCURACY_RULE);
+      expect(systemPrompt("grounded")).not.toContain(KNOWLEDGE_ACCURACY_RULE);
+    });
+
+    it("limits facts to widely documented sources", () => {
+      expect(flat(KNOWLEDGE_ACCURACY_RULE)).toContain(
+        "Only state facts that are widely documented in interviews, press coverage or the film's official materials.",
+      );
+    });
+
+    it("forbids the claims the model most often invents unless fully certain", () => {
+      expect(flat(KNOWLEDGE_ACCURACY_RULE)).toContain(
+        "Do NOT claim who else was considered or auditioned for a role, who turned a role down, exact quotes, " +
+          "exact numbers or dates, or the personal motivations of real people, unless you are fully certain.",
+      );
+    });
+
+    it("never allows a casting alternative", () => {
+      expect(KNOWLEDGE_ACCURACY_RULE).toContain("Never mention a casting alternative.");
+      expect(systemPrompt("knowledge")).toMatch(/Bad \(casting alternative/);
+    });
+
+    it("says to fall back to a safer, well-documented fact", () => {
+      expect(flat(KNOWLEDGE_ACCURACY_RULE)).toContain(
+        "If you are unsure about any detail, choose a safer, famous, well-documented fact instead: a well-known " +
+          "filming technique, the score, a real technical consultant or a verified record.",
+      );
+    });
   });
 
   it("knowledge mode: own knowledge, data only identifies the film, stay confident", () => {

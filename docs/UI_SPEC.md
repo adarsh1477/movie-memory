@@ -55,11 +55,11 @@ Rendered server-side. Authed users are `redirect()`ed before the page paints. Un
 
 ### `/onboarding`
 
-Centered card (`max-w-md`). Heading "What's your favorite movie?", single text input, Save button. Submit uses a Server Action. Validation hints from the same Zod schema the server uses, shown inline under the input.
+Dashboard nav (logo + avatar menu) over the dimmed poster wall (`PosterBackground variant="focus"`, amber glow fallback). A centred glass card (`max-w-lg`, `2xl:max-w-xl`) starting at fixed padding below the nav: eyebrow ("Welcome, <first name>" or "Step 1 of 1"), heading "What's your favorite movie?", subtitle, `MovieSearchCombobox`, selected-movie preview (poster, title, year, "Change"), and an amber **Continue** button (disabled until a title is typed; spinner while saving). Submit uses a Server Action; errors appear under the input with `aria-live`.
 
 ### `/dashboard`
 
-Two-column on `md+`: left `Sidebar` (fixed, ~240px), right content stack (`MovieHeroCard` then `FactCard`, both `rounded-2xl`, spaced by `gap-6`). On `< md` the sidebar collapses into a `TopBar` with avatar + name and a menu toggle for sign-out.
+Sticky `DashboardNav` (logo + avatar menu with name, email, Sign out), then the full-width `MovieHeroCard` hero: blurred poster backdrop, poster card on the left, and on the right the title row (with inline edit) above the glass `FactCard`. Stacks vertically below `lg`. Minimal footer with the TMDB credit. (`Sidebar` / `TopBar` from the original plan are not used.)
 
 ## Components
 
@@ -94,9 +94,13 @@ Props: `{ src: string | null; name: string | null; email: string; size?: 'sm' | 
 
 ### `MovieHeroCard`
 
-Two modes.
-- **View**: `PosterImage` on the left (see below), large title (`text-2xl font-semibold`) and muted "your favorite movie" label to the right, a small `Edit` button at the top-right that swaps to edit mode.
-- **Edit**: input (prefilled, autoselected on open), `Save` (accent) and `Cancel` (`text-muted` outlined). Save triggers an optimistic update via `useMe()` hook — on failure, the input reverts and a toast (`danger`) shows the server message. The poster updates to reflect the new title after the server responds (the new `posterPath` is included in the `MeResponse`).
+Client component; the whole dashboard hero (backdrop, poster card, title row, FactCard). Props: `{ userId, movie: { title, tmdbId, year, posterPath } }`.
+- **View**: "Your favorite movie" eyebrow, large title with the year in `text-muted`, and an icon-only pencil button (`aria-label="Edit favorite movie"`).
+- **Edit**: the title row becomes `MovieSearchCombobox` (prefilled, focused) with **Save** (accent) and **Cancel** (outlined) and a hint "Pick a movie from the list to save it. Esc to cancel." Picking a result saves at once; Enter / Save with no pick sends the typed text (the server only accepts free text when TMDB is degraded or has no match). Escape first closes an open dropdown, then leaves edit mode.
+- **Saving (optimistic)**: the new title, year, poster and backdrop show immediately (with a fade); the pencil shows a spinner and is disabled; the FactCard shows its saving skeleton and makes no requests until the server confirms.
+- **Failure**: everything reverts and the server's message appears under the title (`role="alert"`, `danger`).
+- **Focus**: returns to the pencil after save, cancel or failure.
+- **Stacking**: the title area and the FactCard area both use `animate-fade-up`, which leaves a `transform` and so makes each its own stacking context; the later FactCard would paint over the edit dropdown. The title area is `relative z-20` and the FactCard area `relative z-0`. The `<section>` has no `overflow-hidden` (only the backdrop layer is clipped), so the dropdown can extend past the hero on short or narrow screens. The dropdown itself is fully opaque (`bg-[#17171E]`, border, shadow, scrolling list) — no translucency or blur.
 
 ### `PosterImage`
 
@@ -108,37 +112,56 @@ Props: `{ posterPath: string | null; title: string; className?: string }`.
 
 ### `FactCard`
 
-Header: "Fact about *${movieTitle}*". Body: the fact. Footer: "New fact" button + countdown text (`text-muted`). Countdown ticks every 1s; when it hits 0, the button becomes accent-foreground, signaling a truly fresh fact is now possible.
+Props: `{ userId, movieTitle, displayTitle?, pending? }`. Header: "Did you know?" eyebrow + "Fact about *title*". Body: the fact (2–3 sentences). Footer: the countdown on the left; an action button on the right **only when the user can help** (see below).
+
+- **Countdown**: "Next fact in 0:47", counting to `generatedAt + 60s` on the server's clock (`serverNow` correction), ticking every 1s only while the tab is visible. `aria-hidden` — never read aloud. Shows "Next try in 0:30" when showing a stale fact or after a failed refresh.
+- **Auto-swap**: at 0:00, if the tab is visible, the next fact is fetched and swapped in with a 200ms fade (`motion-safe`, none under reduced motion); "Getting a fresh fact…" with a spinner meanwhile. Hidden tab → paused; on return it resyncs and fetches at once if overdue.
+- **Action button — hidden in the normal state.** Facts refresh on their own at 0:00, and the server's 60s window can't be bypassed, so a permanent button would suggest a control that doesn't exist. It appears only when:
+  - **(a) the last load failed** → accent **Try again** (with or without a fact on screen);
+  - **(b) the fact shown is a stale fallback** (`stale: true`) → outlined **New fact**;
+  - **(c) the countdown passed 0:00 and the new fact hasn't arrived** → outlined **New fact**, shown from 2s after 0:00 (`OVERDUE_GRACE_MS`, so a normal swap never flashes it); clicking replaces the slow automatic request.
+  Either button skips only the client cache, is disabled with an in-place spinner while its own request runs, and fades in (`motion-safe`). If a manual load returns the same fact (the server's window isn't over yet), a `role="status"` line reads "Same fact for now. Next fresh fact in Xs." — not an error. Never shown while a movie edit is saving.
 
 States:
-- **Loading (no cached content)**: skeleton — two shimmering lines (`bg-surface-raised` with a slow left-to-right mask animation), muted countdown placeholder.
-- **Loading (has cached content)**: show the cached fact; the "New fact" button shows a small spinner in-situ; no skeleton.
-- **Error, retriable**: body swaps to a muted "couldn't reach the fact service" message with a "Try again" button (`accent`).
-- **Stale served**: show content normally, append a small `text-muted` line: "showing last available fact".
-- **Rate-limited (429)**: show the existing fact (if any) + a `text-muted` line "slow down — next fact in Xs" where X is `retryAfterMs / 1000` ceiled.
+- **Loading (no cached content)**: skeleton — three shimmering lines, footer placeholders, New fact disabled.
+- **Cache hit** (fetched < 30s ago **and** still inside its server window): the fact renders immediately, no request. An expired entry shows the skeleton and fetches — an old fact is never painted first.
+- **Late load** (the tab was hidden past the window): skeleton while loading, not the expired fact; on failure the old fact returns with "Showing the last available fact".
+- **Error with nothing to show**: body becomes a `role="alert"` message ("Couldn't reach the fact service", "Slow down a little. Try again in Xs.", …) with an accent **Try again** button.
+- **Stale served / refresh failed**: keep the fact, add a `text-muted` line with a clock icon: "Showing the last available fact".
+- **Saving (`pending`)**: skeleton labelled "Saving your movie…", no requests.
 
 ## Loading / error / empty / missing-photo coverage
 
 | State                  | Where            | Behavior                                                                 |
 |------------------------|------------------|--------------------------------------------------------------------------|
-| First fact load        | FactCard         | Skeleton for both lines + countdown placeholder                          |
-| Movie edit in-flight   | MovieHeroCard    | Input disabled, Save shows spinner, text already updated optimistically  |
-| OpenAI down w/ prior   | FactCard         | Prior fact + "showing last available fact" line                          |
-| OpenAI down w/o prior  | FactCard         | Error message + retry button                                             |
-| Rate limited           | FactCard         | Keep existing content, add muted "slow down" line                        |
+| First fact load        | FactCard         | Skeleton lines + footer placeholders; no action button                   |
+| Cache hit              | FactCard         | Fetched < 30s ago and inside generatedAt + 60s: shown instantly, no request |
+| Expired cache / late load | FactCard      | Skeleton + fetch; the expired fact is never shown as current            |
+| Movie edit in-flight   | MovieHeroCard    | New title / year / poster shown optimistically; pencil spinner; FactCard "Saving your movie…" skeleton |
+| Movie edit failed      | MovieHeroCard    | Revert to the previous movie + server message under the title           |
+| OpenAI down w/ prior   | FactCard         | Prior fact + "Showing the last available fact"; next try in 30s          |
+| OpenAI down w/o prior  | FactCard         | Error message + Try again                                                |
+| Rate limited           | FactCard         | With a fact: keep it, next try after `retryAfterMs`. Without: "Slow down a little. Try again in Xs." |
+| Normal (current fact)  | FactCard         | Fact + countdown; no button — it refreshes by itself at 0:00             |
+| Refresh failed         | FactCard         | Last fact + stale hint + **Try again**                                   |
+| Stale fallback shown   | FactCard         | Fact + stale hint + **New fact**                                         |
+| 0:00 passed, no fact yet | FactCard       | From 0:00 + 2s: **New fact** (replaces the slow request)                 |
+| Tab hidden             | FactCard         | Countdown and auto-load paused; resync on return                         |
 | Movie empty on load    | n/a (routing)    | `/dashboard` server redirects to `/onboarding`                           |
 | Missing Google photo   | Avatar           | Initials from name; if name null, from email prefix                      |
 | Missing Google name    | Sidebar/TopBar   | Fallback to email prefix (`foo` from `foo@bar.com`)                      |
-| Session expired mid-use| Any API call     | Typed `UNAUTHORIZED` from `lib/api.ts` → client clears cache → redirect  |
+| Session expired mid-use| Any API call     | Typed `UNAUTHORIZED` from `lib/api.ts` → redirect to `/`; sign-out clears the fact cache |
 | Poster unavailable     | PosterImage      | Gradient film-frame fallback (same dimensions, no layout shift)          |
 | TMDB down at save time | Server action    | `posterPath` saved as `null`; fallback shown; no error surfaced to user  |
 
 ## Interaction timings
 
 - Hover color change: 150ms
-- Skeleton → content crossfade: 200ms
+- Skeleton → content crossfade: 200ms (`animate-fade-in`, `motion-safe` only)
+- Fact auto-swap and optimistic title / poster change: 200ms fade, `motion-safe` only
 - Edit mode toggle: 200ms
-- Countdown updates: every 1s (`setInterval`); cleared on unmount
+- Countdown updates: every 1s (`setInterval`), only while the tab is visible; resyncs immediately on a new target or when the tab returns; cleared on unmount
+- Combobox search debounce: 300ms
 
 ## Footer
 
@@ -151,4 +174,5 @@ States:
 - All inputs have an associated `<label>` (visible, not just `aria-label` — screen readers and sighted keyboard users both benefit).
 - Buttons have discernible text; icon-only buttons add `aria-label`.
 - The toast region is `role="status" aria-live="polite"`; errors use `role="alert" aria-live="assertive"`.
-- The 1s countdown is NOT read aloud (it would be noise); the time is shown visually only.
+- The 1s countdown is NOT read aloud (it would be noise); it is `aria-hidden` and shown visually only. New facts are announced via the fact body's `aria-live="polite"`; the "Same fact for now…" hint is a one-off `role="status"`.
+- Inline edit: icon-only pencil has `aria-label`; the search box has a (visually hidden) label; Escape and Cancel exit; focus returns to the pencil; save errors are `role="alert"`.

@@ -116,7 +116,7 @@ export async function getFactForUser(userId: string, deps: FactServiceDeps = {})
           // Strategy and topic are decided here, in code — not by the model.
           const today = new Date(clock.now()).toISOString().slice(0, 10);
           const mode = chooseFactMode(details, knowledgeCutoff, today);
-          const angle = pickAngle(await tx.fact.count({ where: { userId, movieTitle } }));
+          const angle = pickAngle(await tx.fact.count({ where: { userId, movieTitle } }), mode);
           const call = { model: OPENAI_MODEL, mode, angle };
 
           const callStart = clock.now();

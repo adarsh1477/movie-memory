@@ -40,6 +40,11 @@ export const factRateLimiter = createRateLimiter(FACT_RATE_LIMIT);
 // use up the user's fact budget (and vice versa).
 export const movieSearchRateLimiter = createRateLimiter(FACT_RATE_LIMIT);
 
+// Movie saves (PUT /api/me/movie): writes plus a possible TMDB search each, so a
+// tighter budget, again in its own bucket.
+export const MOVIE_EDIT_RATE_LIMIT = { limit: 20, windowMs: 60_000 } as const;
+export const movieEditRateLimiter = createRateLimiter(MOVIE_EDIT_RATE_LIMIT);
+
 export function consume(userId: string, now?: number): RateLimitResult {
   return factRateLimiter.consume(userId, now);
 }

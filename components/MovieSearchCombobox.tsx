@@ -282,7 +282,13 @@ export default function MovieSearchCombobox({
       {open && status !== "idle" && (
         // Absolutely positioned against the full-width field wrapper, so it matches the
         // card's content width. Parents must not clip (no overflow-hidden on the card).
-        <div className="absolute inset-x-0 top-full z-50 mt-2 overflow-hidden rounded-xl border border-white/10 bg-[#17171E]/[0.98] shadow-[0_24px_60px_rgba(0,0,0,0.65),0_0_0_1px_rgba(0,0,0,0.4)] motion-safe:animate-fade-in">
+        // Fully opaque so nothing behind it (fact text, blurred backdrop) shows through.
+        // z-50 only orders it inside its own stacking context: the parent that hosts the
+        // combobox must sit above its siblings (see MovieHeroCard's title area).
+        <div
+          className="absolute inset-x-0 top-full z-50 mt-2 overflow-hidden rounded-xl border border-white/15 bg-[#17171E] shadow-[0_24px_60px_rgba(0,0,0,0.75),0_0_0_1px_rgba(0,0,0,0.5)] motion-safe:animate-fade-in"
+          data-testid="combobox-popup"
+        >
 
           {status === "loading" && results.length === 0 && (
             <div className="flex flex-col gap-1 p-2" aria-hidden="true">
