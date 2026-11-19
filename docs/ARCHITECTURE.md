@@ -123,6 +123,16 @@ loadMovie(userId)  ──missing──▶ 400 { NO_MOVIE }
 findLatestFact(userId, title)  ──age < 60s──▶ 200 fact (cache_hit)
   │ miss or stale
   ▼
+── before the lock (never holds it) ────────────────────────────────────────
+getMovieDetails(tmdbId)            TMDB, ≤3s, 24h cache        ──fail──▶ details = null
+  │
+chooseFactMode(details, MODEL_KNOWLEDGE_CUTOFF, today)  → knowledge | grounded
+  │ grounded only
+  ▼
+getWikipediaNotes(title, year, director)   en.wikipedia.org, ≤2s, 24h cache (misses too)
+  │   search → title match → page must mention year or director → production sections ≤3000 chars
+  │   ──no match / unsure / fail──▶ notes = null (TMDB only)
+  ▼
 prisma.$transaction(timeout: 20s, maxWait: 5s) {
   SET LOCAL lock_timeout = '10s'
   pg_advisory_xact_lock(hashtext('fact:'||userId))
@@ -130,7 +140,7 @@ prisma.$transaction(timeout: 20s, maxWait: 5s) {
   ├──acquired──▶ re-check findLatestFact
   │               ├── fresh (writer just filled it) ──▶ 200 fact (cache_hit post-lock)
   │               └── still stale
-  │                    └── openai.generate(movie, avoid=last3)   (8s AbortSignal)
+  │                    └── openai.generate(movie + tmdb [+ wikipediaNotes], avoid=last10)   (8s AbortSignal)
   │                           ├── ok    ──▶ INSERT Fact ──▶ 200 fact
   │                           └── error ──▶ findLatestFact(any-age)
   │                                           ├── present ──▶ 200 fact {stale:true}
@@ -142,11 +152,11 @@ prisma.$transaction(timeout: 20s, maxWait: 5s) {
 }
 ```
 
-Every branch logs a `fact.*` event with `durationMs`. Response always sent with `Cache-Control: no-store`.
+Every branch logs a `fact.*` event with `durationMs` (including `fact.tmdb_context` and `fact.wikipedia_context` with `ok` / `found`). Response always sent with `Cache-Control: no-store`. The two lookups before the lock add at most 3s + 2s to a cache miss and nothing to the time the lock is held, so the OpenAI 8s < lock_timeout 10s < tx 20s order is unchanged.
 
 ## Server-only vs client-only boundaries
 
-- Server-only: `lib/env.ts`, `lib/prisma.ts`, `lib/openai.ts`, `lib/tmdb.ts`, `lib/fact-service.ts`, `lib/lock.ts`, `lib/rate-limit.ts`, `lib/logger.ts`, `lib/auth.ts`, all route handlers, all `page.tsx` by default, `components/PosterBackground.tsx` (server component — fetches and renders TMDB poster paths without exposing them to the client bundle). `TMDB_API_KEY` never appears in any `NEXT_PUBLIC_*` var or client bundle.
+- Server-only: `lib/env.ts`, `lib/prisma.ts`, `lib/openai.ts`, `lib/tmdb.ts`, `lib/wikipedia.ts`, `lib/fact-service.ts`, `lib/lock.ts`, `lib/rate-limit.ts`, `lib/logger.ts`, `lib/auth.ts`, all route handlers, all `page.tsx` by default, `components/PosterBackground.tsx` (server component — fetches and renders TMDB poster paths without exposing them to the client bundle). `TMDB_API_KEY` never appears in any `NEXT_PUBLIC_*` var or client bundle.
 - Client-only: `components/MovieHeroCard.tsx` (inline edit), `components/PosterImage.tsx` (renders stored path via `next/image`), `components/FactCard.tsx` (hook), `components/SignInButton.tsx`, `components/SignOutButton.tsx`, `lib/api.ts`, `lib/client-cache.ts`.
 - `lib/validation.ts` and `lib/errors.ts` are shared — no server-only imports, so they're safe on both sides.
 

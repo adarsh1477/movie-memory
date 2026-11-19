@@ -16,7 +16,11 @@ function causes(err: unknown): string {
 }
 
 describe("test network guard", () => {
-  it.each(["https://api.openai.com/v1/chat/completions", "https://api.themoviedb.org/3/search/movie?query=heat"])(
+  it.each([
+    "https://api.openai.com/v1/chat/completions",
+    "https://api.themoviedb.org/3/search/movie?query=heat",
+    "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=dune",
+  ])(
     "blocks a direct fetch to %s",
     async (url) => {
       await expect(fetch(url)).rejects.toThrow(/Blocked real network call/);
@@ -28,6 +32,14 @@ describe("test network guard", () => {
     const err = await generateFact({ title: "Heat", year: 1995 }, [], AbortSignal.timeout(8_000)).catch((e) => e);
     expect(err).toBeInstanceOf(OpenAiError);
     expect(causes(err)).toMatch(/Blocked real network call to api\.openai\.com/);
+  });
+
+  it("blocks the real Wikipedia lookup when a test forgets to mock it (a transient failure, never a throw)", async () => {
+    const { fetchWikipediaNotes } = await import("@/lib/wikipedia");
+    await expect(fetchWikipediaNotes({ title: "Dune: Part Two", year: 2024, director: "Denis Villeneuve" })).resolves.toEqual({
+      ok: false,
+      notes: null,
+    });
   });
 
   it("blocks the real TMDB search (which then reports degraded, as it would on any failure)", async () => {

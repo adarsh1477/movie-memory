@@ -32,8 +32,9 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
-    # Dummy values only — no real secrets. Tests mock OpenAI and TMDB, and
-    # vitest.setup.ts blocks any real request to api.openai.com / api.themoviedb.org.
+    # Dummy values only — no real secrets. Tests mock OpenAI, TMDB and Wikipedia, and
+    # vitest.setup.ts blocks any real request to api.openai.com / api.themoviedb.org /
+    # en.wikipedia.org.
     # TMDB_API_KEY is deliberately unset (TMDB tests set their own fake key).
     env:
       DATABASE_URL: postgresql://movie:movie@localhost:5432/movie_memory

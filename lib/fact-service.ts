@@ -12,6 +12,7 @@ import { env } from "./env";
 import { withAdvisoryLock, LOCK_TIMEOUT_MS } from "./lock";
 import { factRateLimiter, type RateLimiter } from "./rate-limit";
 import { getMovieDetails, type MovieDetails, type MovieDetailsLoader } from "./tmdb";
+import { getWikipediaNotes, type WikipediaLoader } from "./wikipedia";
 import { AppErrorException, LockTimeoutError } from "./errors";
 import { logger } from "./logger";
 
@@ -35,6 +36,7 @@ export type FactServiceDeps = {
   prisma?: PrismaClient;
   rateLimiter?: RateLimiter;
   movieDetails?: MovieDetailsLoader;
+  wikipedia?: WikipediaLoader;
   /** YYYY-MM-DD; defaults to MODEL_KNOWLEDGE_CUTOFF. */
   knowledgeCutoff?: string;
 };
@@ -53,6 +55,7 @@ export async function getFactForUser(userId: string, deps: FactServiceDeps = {})
   const rateLimiter = deps.rateLimiter ?? factRateLimiter;
   const loadDetails = deps.movieDetails ?? getMovieDetails;
   const knowledgeCutoff = deps.knowledgeCutoff ?? env.MODEL_KNOWLEDGE_CUTOFF;
+  const loadWikipedia = deps.wikipedia ?? getWikipediaNotes;
   const started = clock.now();
 
   const limit = rateLimiter.consume(userId, started);
@@ -96,6 +99,33 @@ export async function getFactForUser(userId: string, deps: FactServiceDeps = {})
     log.info({ event: "fact.tmdb_context", ok: details !== null, durationMs: clock.now() - detailsStart });
   }
 
+  // Strategy is decided in code, not by the model: a pure function of the TMDB data and
+  // the date, so deciding it before the lock is the same as deciding it inside.
+  const today = new Date(clock.now()).toISOString().slice(0, 10);
+  const mode = chooseFactMode(details, knowledgeCutoff, today);
+
+  // Grounded mode only: production notes from the film's Wikipedia article, as a second
+  // source. Also BEFORE the lock (≤2s, cached 24h incl. misses, shared in flight), so the
+  // lock timing and the OpenAI 8s < lock 10s < tx 20s invariant are unchanged.
+  // Any failure or no match: TMDB-only, exactly as without it.
+  let wikipedia: string | null = null;
+  if (mode === "grounded" && details) {
+    const wikiStart = clock.now();
+    const releaseYear = details.releaseDate ? Number(details.releaseDate.slice(0, 4)) : null;
+    const result = await loadWikipedia({
+      title: details.title,
+      year: releaseYear && Number.isFinite(releaseYear) ? releaseYear : movie.year,
+      director: details.directors[0] ?? null,
+    }).catch(() => ({ ok: false, notes: null }));
+    wikipedia = result.notes?.text ?? null;
+    log.info({
+      event: "fact.wikipedia_context",
+      ok: result.ok,
+      found: wikipedia !== null,
+      durationMs: clock.now() - wikiStart,
+    });
+  }
+
   log.info({ event: "fact.lock_wait_start", durationMs: elapsed() });
   const lockWaitStart = clock.now();
 
@@ -113,9 +143,7 @@ export async function getFactForUser(userId: string, deps: FactServiceDeps = {})
             return { fact: latest, stale: false };
           }
 
-          // Strategy and topic are decided here, in code — not by the model.
-          const today = new Date(clock.now()).toISOString().slice(0, 10);
-          const mode = chooseFactMode(details, knowledgeCutoff, today);
+          // The topic is decided here, in code (it depends on the user's fact count).
           const angle = pickAngle(await tx.fact.count({ where: { userId, movieTitle } }), mode);
           const call = { model: OPENAI_MODEL, mode, angle };
 
@@ -123,7 +151,7 @@ export async function getFactForUser(userId: string, deps: FactServiceDeps = {})
           let content: string;
           try {
             const generated = await openai(
-              { title: movieTitle, year: movie.year, details, today, mode, angle },
+              { title: movieTitle, year: movie.year, details, today, mode, angle, wikipedia },
               recent.slice(0, AVOID_COUNT).map((f) => f.content),
               AbortSignal.timeout(OPENAI_DEADLINE_MS),
             );

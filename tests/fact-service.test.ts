@@ -74,6 +74,7 @@ let now: number;
 let db: FakeDb;
 let openai: ReturnType<typeof vi.fn>;
 let movieDetails: ReturnType<typeof vi.fn>;
+let wikipedia: ReturnType<typeof vi.fn>;
 let deps: FactServiceDeps;
 
 const HEAT_DETAILS: MovieDetails = {
@@ -112,12 +113,17 @@ beforeEach(() => {
     db.events.push("tmdb");
     return HEAT_DETAILS;
   });
+  wikipedia = vi.fn(async () => {
+    db.events.push("wikipedia");
+    return { ok: true, notes: null };
+  });
   deps = {
     clock: { now: () => now },
     openai: openai as unknown as FactServiceDeps["openai"],
     prisma: fakePrisma(db),
     rateLimiter: createRateLimiter({ limit: 1_000, windowMs: 60_000 }),
     movieDetails: movieDetails as unknown as FactServiceDeps["movieDetails"],
+    wikipedia: wikipedia as unknown as FactServiceDeps["wikipedia"],
   };
 });
 
@@ -196,6 +202,7 @@ describe("movie year", () => {
       today: TODAY,
       mode: "knowledge",
       angle: FACT_ANGLES.knowledge[0],
+      wikipedia: null,
     });
   });
 });
@@ -312,6 +319,76 @@ describe("TMDB context", () => {
 
     expect(result.stale).toBe(false);
     expect(openai.mock.calls[0][0]).toMatchObject({ title: "Heat", year: 1995, details: null });
+  });
+});
+
+// ── Wikipedia production notes (grounded mode only) ───────────────────────────
+
+describe("Wikipedia notes", () => {
+  const DUNE: MovieDetails = {
+    ...HEAT_DETAILS,
+    title: "Dune: Part Two",
+    releaseDate: "2024-03-01",
+    directors: ["Denis Villeneuve"],
+  };
+  const NOTES = "Production: Filming took place in Budapest and in the Wadi Rum desert of Jordan.";
+
+  it("grounded mode: looks up the film by TMDB title, release year and director, and passes the notes on", async () => {
+    movieDetails.mockResolvedValueOnce(DUNE);
+    wikipedia.mockResolvedValueOnce({ ok: true, notes: { pageTitle: "Dune: Part Two", text: NOTES } });
+
+    await getFactForUser("userA", deps);
+
+    expect(wikipedia).toHaveBeenCalledWith({ title: "Dune: Part Two", year: 2024, director: "Denis Villeneuve" });
+    expect(openai.mock.calls[0][0]).toMatchObject({ mode: "grounded", wikipedia: NOTES });
+  });
+
+  it("fetches before the advisory lock, after TMDB", async () => {
+    movieDetails.mockImplementationOnce(async () => {
+      db.events.push("tmdb");
+      return DUNE;
+    });
+    await getFactForUser("userA", deps);
+    expect(db.events).toEqual(["tmdb", "wikipedia", "lock", "openai"]);
+  });
+
+  it("knowledge mode: no Wikipedia lookup at all", async () => {
+    await getFactForUser("userA", deps); // Heat, 1995 → knowledge
+    expect(wikipedia).not.toHaveBeenCalled();
+    expect(openai.mock.calls[0][0]).toMatchObject({ mode: "knowledge", wikipedia: null });
+  });
+
+  it("free-text title (no TMDB details): no Wikipedia lookup", async () => {
+    await getFactForUser("userB", deps);
+    expect(wikipedia).not.toHaveBeenCalled();
+  });
+
+  it("no match: grounded on TMDB only, exactly as without Wikipedia", async () => {
+    movieDetails.mockResolvedValueOnce(DUNE);
+    wikipedia.mockResolvedValueOnce({ ok: true, notes: null });
+    const result = await getFactForUser("userA", deps);
+    expect(result.stale).toBe(false);
+    expect(openai.mock.calls[0][0]).toMatchObject({ mode: "grounded", details: DUNE, wikipedia: null });
+  });
+
+  it.each([
+    ["reports a transient failure", () => Promise.resolve({ ok: false, notes: null })],
+    ["throws", () => Promise.reject(new Error("boom"))],
+  ])("a Wikipedia lookup that %s never breaks fact generation", async (_label, impl) => {
+    movieDetails.mockResolvedValueOnce(DUNE);
+    wikipedia.mockImplementationOnce(impl);
+
+    const result = await getFactForUser("userA", deps);
+
+    expect(result.stale).toBe(false);
+    expect(result.fact.content).toBe("fact #1");
+    expect(openai.mock.calls[0][0]).toMatchObject({ mode: "grounded", wikipedia: null });
+  });
+
+  it("falls back to the stored movie year when TMDB has no release date", async () => {
+    movieDetails.mockResolvedValueOnce({ ...DUNE, releaseDate: null, status: "In Production" });
+    await getFactForUser("userA", deps); // userA's stored year is 1995
+    expect(wikipedia.mock.calls[0][0]).toMatchObject({ year: 1995 });
   });
 });
 

@@ -11,10 +11,10 @@ delete process.env.MODEL_KNOWLEDGE_CUTOFF;
 // NODE_ENV is set to "test" automatically by vitest
 
 // ── Network guard ─────────────────────────────────────────────────────────────
-// Tests must never reach OpenAI or TMDB (locally or in CI). Any fetch to those hosts
+// Tests must never reach OpenAI, TMDB or Wikipedia (locally or in CI). Any fetch to those hosts
 // that isn't intercepted by a test's own mock fails loudly. Tests that stub `fetch`
 // (vi.stubGlobal) replace this for their duration; vi.unstubAllGlobals() restores it.
-export const BLOCKED_TEST_HOSTS = ["api.openai.com", "api.themoviedb.org"];
+export const BLOCKED_TEST_HOSTS = ["api.openai.com", "api.themoviedb.org", "en.wikipedia.org"];
 
 const realFetch = globalThis.fetch;
 

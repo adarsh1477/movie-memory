@@ -118,6 +118,19 @@ describe("generateFact request", () => {
     });
   });
 
+  it("grounded mode: sends Wikipedia notes as a wikipediaNotes data field", async () => {
+    const { client, create } = fakeClient(reply(GOOD_2));
+    await generateFact({ ...DOOMSDAY_GROUNDED, wikipedia: "Production: Filming began in London." }, [], signal(), client);
+    expect(userOf(create, 0).wikipediaNotes).toBe("Production: Filming began in London.");
+    expect(systemOf(create, 0)).toBe(systemPrompt("grounded"));
+  });
+
+  it("knowledge mode: never sends Wikipedia notes", async () => {
+    const { client, create } = fakeClient(reply(GOOD));
+    await generateFact({ ...HEAT_KNOWLEDGE, wikipedia: "Production: something." }, [], signal(), client);
+    expect(userOf(create, 0)).not.toHaveProperty("wikipediaNotes");
+  });
+
   it("sends only identifying TMDB fields in knowledge mode", async () => {
     const { client, create } = fakeClient(reply(GOOD));
     await generateFact(HEAT_KNOWLEDGE, [], signal(), client);

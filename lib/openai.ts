@@ -41,6 +41,8 @@ export type FactMovie = {
   mode?: FactMode;
   /** Suggested topic. Defaults to the first angle. */
   angle?: FactAngle;
+  /** Wikipedia production notes; used in grounded mode only (including a grounded retry). */
+  wikipedia?: string | null;
 };
 
 export type GeneratedFact = {
@@ -85,6 +87,7 @@ export async function generateFact(
     today,
     angle: movie.angle ?? FACT_ANGLES[mode][0],
     details,
+    wikipedia: movie.wikipedia ?? null,
     avoid,
   };
   let transportRetryUsed = false;

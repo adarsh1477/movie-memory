@@ -44,6 +44,7 @@ lib/
   http.ts                        jsonOk / jsonError envelopes, Cache-Control: no-store
   fact-service.ts                getFactForUser(userId) — the main service
   fact-history.ts                getFactHistory(userId, { limit, cursor }) — keyset page of the user's facts
+  wikipedia.ts                   Server-only. getWikipediaNotes({ title, year, director }): production notes, ≤2s, 24h cache
   lock.ts                        withAdvisoryLock(tx, key, fn)
   rate-limit.ts                  createRateLimiter(); fact 30/min, search 30/min, movie edit 20/min — separate buckets
   logger.ts                      pino instance, PII redaction, child({event})
@@ -113,11 +114,15 @@ export const KNOWLEDGE_ACCURACY_RULE: string  // in both knowledge prompts: wide
                                               // unless fully certain; else a safer well-documented fact
 export function systemPrompt(mode: FactMode): string        // intro + mode block + what-to-write + never-list + 2 good / 2 bad examples (per mode)
 export function strictSystemPrompt(mode: FactMode): string  // retry prompt for the same mode
-export const GROUNDED_SOURCE_RULE: string   // in both grounded prompts: every claim from the TMDB data; no locations /
+export const GROUNDED_STYLE_RULE: string    // in both grounded prompts: no "suggesting" / "hints at" / "intriguing" /
+                                            // "surprising", no story predictions; a different detail than the avoid list
+export const GROUNDED_SOURCE_RULE: string   // in both grounded prompts: every claim from the TMDB data or the Wikipedia
+                                            // notes, nothing else; prefer the notes' production details; no locations /
                                             // effects / CGI / budgets / BTS / production troubles unless stated;
                                             // thin data → premise, cast or franchise tie-in, upcoming if unreleased
 export function buildUserMessage(mode: FactMode, input: { title; year; today; angle; details; avoid }): string
-// JSON data: { movie, year, today, angle, tmdb, avoid }. tmdb = full details (grounded),
+// JSON data: { movie, year, today, angle, tmdb, [wikipediaNotes], avoid }. wikipediaNotes only in
+// grounded mode and only when there are notes. tmdb = full details (grounded),
 // { title, releaseDate, directors } (knowledge), or null.
 
 // lib/openai.ts
@@ -129,6 +134,7 @@ export async function generateFact(
     today?: string                  // YYYY-MM-DD, so "upcoming" can be judged
     mode?: FactMode                 // chosen by the caller; default chooseFactMode(…, MODEL_KNOWLEDGE_CUTOFF, today)
     angle?: FactAngle               // suggested topic; default FACT_ANGLES[mode][0]
+    wikipedia?: string | null       // production notes; sent in grounded mode only
   },
   avoid: string[],                  // last 10 usable facts for this user + title
   signal: AbortSignal,              // the whole 8s deadline, covering every retry below
@@ -400,6 +406,7 @@ All authed responses: `Cache-Control: no-store`.
 - `lib/validation.ts` — Zod schemas used by both routes and the client wrapper.
 - `lib/http.ts` — server-side route plumbing: `requireUserId()` (the auth guard), `handle()` (error → envelope, unknown → 500 `INTERNAL` without details), `jsonOk`/`jsonError` (always `no-store`). All authed routes are written as `handle(route, async () => { const userId = await requireUserId(); … })`. Any 500 in the JSON is a generic message; the real error is in the pino log (`api.unhandled_error`).
 - `lib/me.ts` — `loadMe(userId)`: the one place that shapes `MeResponse`.
+- `lib/wikipedia.ts` — `fetchWikipediaNotes({ title, year, director })`: MediaWiki `list=search` (`"<title> <year> film"`), then `prop=extracts&explaintext` for the best candidate. A candidate's title (minus a `(film)` / `(<year> film)` qualifier) must equal the TMDB title after normalization, and the article's lead must mention the release year or the director; otherwise `notes: null` (never a guess). Keeps only production-type sections (Production, Development, Casting, Filming, Visual effects, Design, Music…; never Plot, Cast, Release, Reception, Soundtrack), capped at 3000 chars. One 2s `AbortSignal` covers both requests; descriptive `User-Agent`, no key. Returns `{ ok, notes }`: `ok: false` for transient failures. `createWikipediaLoader()`: 24h in-memory cache keyed by normalized title + year + director, shared in-flight requests; definite answers (including misses) cached, transient failures not.
 - `lib/fact-history.ts` — `getFactHistory(userId, { limit, cursor }, db?)`: resolves the cursor *scoped to the user* (unknown or foreign id → `VALIDATION` "Invalid cursor"), then reads `where userId [and (createdAt, id) < cursor]` ordered by `createdAt desc, id desc`, `take limit + 1`, in up to 5 batches, skipping `looksLikeRefusal` rows so pages stay full. `nextCursor` = the last returned id when more exist (or the last scanned row if the scan cap is hit), else `null`. Served by the `(userId, createdAt desc, id desc)` index.
 - `components/FactHistory.tsx` — props `{ latestFactAt, pageSize? }` (`pageSize` defaults to `HISTORY_PAGE_SIZE` = 5, sent as `?limit=` on every request). Page 1 on mount; `Load more` appends with `cursor = nextCursor`; when `latestFactAt` changes and isn't already the newest item, refreshes page 1 and merges (dedupe by id; a non-overlapping page replaces the list). Router and callbacks are read through refs so identities never trigger refetches. 401 → clear fact cache, `/`. State lives only in the component (keyed by user in `MovieHeroCard`), never in storage.
 - `FactCard` `onFactShown?(generatedAt)` — fired when the fact on screen changes; observe-only, used by `MovieHeroCard` to drive the history refresh.
