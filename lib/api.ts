@@ -5,6 +5,7 @@ import { z } from "zod";
 import { AppErrorException, type AppError } from "./errors";
 import {
   ApiError,
+  FactHistoryResponse,
   FactResponse,
   MeResponse,
   MovieSearchResponse,
@@ -94,6 +95,15 @@ export function putMovie(body: MoviePutBody, signal?: AbortSignal) {
 
 export function getFact(signal?: AbortSignal) {
   return apiFetch("/api/fact", FactResponse, { signal });
+}
+
+/** One page of fact history. `cursor` = the previous page's nextCursor. */
+export function getFactHistory(params: { limit?: number; cursor?: string | null } = {}, signal?: AbortSignal) {
+  const qs = new URLSearchParams();
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  if (params.cursor) qs.set("cursor", params.cursor);
+  const query = qs.toString();
+  return apiFetch(`/api/facts/history${query ? `?${query}` : ""}`, FactHistoryResponse, { signal });
 }
 
 export type MovieSearchFn = (query: string, signal: AbortSignal) => Promise<MovieSearchResponse>;

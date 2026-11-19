@@ -21,6 +21,7 @@ components/
   Avatar.tsx                     Initials fallback when image missing or 404s
   MovieHeroCard.tsx              Client hero: backdrop, poster, title + inline edit (optimistic), FactCard
   PosterImage.tsx                next/image from posterPath or gradient film-frame fallback
+  FactHistory.tsx                Dashboard-only timeline of past facts: Load more, refresh on new fact
   FactCard.tsx                   useFact(): skeleton, countdown, auto-swap, New fact, stale / error / saving
   SignInButton.tsx  SignOutButton.tsx
   Skeleton.tsx                   Shared shimmer primitive
@@ -42,6 +43,7 @@ lib/
   use-page-visible.ts            usePageVisible(), useNow()
   http.ts                        jsonOk / jsonError envelopes, Cache-Control: no-store
   fact-service.ts                getFactForUser(userId) — the main service
+  fact-history.ts                getFactHistory(userId, { limit, cursor }) — keyset page of the user's facts
   lock.ts                        withAdvisoryLock(tx, key, fn)
   rate-limit.ts                  createRateLimiter(); fact 30/min, search 30/min, movie edit 20/min — separate buckets
   logger.ts                      pino instance, PII redaction, child({event})
@@ -375,6 +377,7 @@ export type Envelope<T> = { ok: true; data: T } | { ok: false; error: ApiError }
 | GET    | `/api/me`       | (none)                    | `Envelope<MeResponse>`                  | 401                                         |
 | PUT    | `/api/me/movie` | `MoviePutBody` (JSON)     | `Envelope<MeResponse>`                  | 401, 429 + `Retry-After` (20/min per user, counted before the body is read), 400 (VALIDATION + `fieldErrors`; non-JSON body; free text when TMDB has matches) |
 | GET    | `/api/fact`     | (none — no `?force`)      | `Envelope<FactResponse>`                | 401, 400 (NO_MOVIE), 429 + `Retry-After`, 502 |
+| GET    | `/api/facts/history` | `?limit=` (1–50, default 10), `?cursor=` (a fact id) | `Envelope<FactHistoryResponse>` = `{ items: [{ id, movieTitle, content, createdAt }], nextCursor: string \| null }` | 401, 400 (VALIDATION: bad limit, malformed cursor, or a cursor that isn't one of the user's own facts), 429 + `Retry-After` |
 | GET    | `/api/movies/search` | `?q=` (trim, 2–100)  | `Envelope<MovieSearchResponse>` (`degraded: true` when TMDB fails) | 401, 400 (VALIDATION), 429 |
 
 All authed responses: `Cache-Control: no-store`.
@@ -397,6 +400,9 @@ All authed responses: `Cache-Control: no-store`.
 - `lib/validation.ts` — Zod schemas used by both routes and the client wrapper.
 - `lib/http.ts` — server-side route plumbing: `requireUserId()` (the auth guard), `handle()` (error → envelope, unknown → 500 `INTERNAL` without details), `jsonOk`/`jsonError` (always `no-store`). All authed routes are written as `handle(route, async () => { const userId = await requireUserId(); … })`. Any 500 in the JSON is a generic message; the real error is in the pino log (`api.unhandled_error`).
 - `lib/me.ts` — `loadMe(userId)`: the one place that shapes `MeResponse`.
+- `lib/fact-history.ts` — `getFactHistory(userId, { limit, cursor }, db?)`: resolves the cursor *scoped to the user* (unknown or foreign id → `VALIDATION` "Invalid cursor"), then reads `where userId [and (createdAt, id) < cursor]` ordered by `createdAt desc, id desc`, `take limit + 1`, in up to 5 batches, skipping `looksLikeRefusal` rows so pages stay full. `nextCursor` = the last returned id when more exist (or the last scanned row if the scan cap is hit), else `null`. Served by the `(userId, createdAt desc, id desc)` index.
+- `components/FactHistory.tsx` — props `{ latestFactAt, pageSize? }`. Page 1 on mount; `Load more` appends with `cursor = nextCursor`; when `latestFactAt` changes and isn't already the newest item, refreshes page 1 and merges (dedupe by id; a non-overlapping page replaces the list). Router and callbacks are read through refs so identities never trigger refetches. 401 → clear fact cache, `/`. State lives only in the component (keyed by user in `MovieHeroCard`), never in storage.
+- `FactCard` `onFactShown?(generatedAt)` — fired when the fact on screen changes; observe-only, used by `MovieHeroCard` to drive the history refresh.
 - `lib/movie-service.ts` — `saveMovieForUser`: the save rules shared by the onboarding server action and `PUT /api/me/movie`.
 - `lib/api.ts` — typed `fetch` wrapper; validates the `Envelope<T>` with the route's Zod schema; turns every failure into `AppErrorException` with a stable `code`; lets aborts through.
 - `lib/use-fact.ts` — `useFact()`: renders a client-cache hit with no request; otherwise loads `/api/fact`. Schedules the next load at the end of the server's 60s window using `serverNow` for clock correction, only while the tab is visible; keeps the last fact on failure and retries after 30s; `newFact()` skips only the client cache. Calls `onUnauthorized` on 401. Remount (`MovieHeroCard` keys `FactCard` by the confirmed movie title) to switch movies.

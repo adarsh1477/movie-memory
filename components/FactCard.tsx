@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Skeleton from "./Skeleton";
 import { factCache } from "@/lib/client-cache";
@@ -86,9 +87,14 @@ export type FactCardProps = {
   displayTitle?: string;
   /** A movie edit is being saved: show the skeleton, hold all requests. */
   pending?: boolean;
+  /**
+   * Called with the fact's generatedAt whenever a different fact is shown (e.g. so the
+   * fact history can refresh). Observes only; it doesn't change how facts are loaded.
+   */
+  onFactShown?: (generatedAt: string) => void;
 };
 
-export default function FactCard({ userId, movieTitle, displayTitle, pending = false }: FactCardProps) {
+export default function FactCard({ userId, movieTitle, displayTitle, pending = false, onFactShown }: FactCardProps) {
   const router = useRouter();
   const { status, fact, error, refreshing, manual, nextAt, sameFactWaitMs, newFact, retry } = useFact({
     userId,
@@ -101,6 +107,18 @@ export default function FactCard({ userId, movieTitle, displayTitle, pending = f
   });
   const visible = usePageVisible();
   const now = useNow(visible && fact !== null && !pending, 1_000, nextAt);
+
+  // Tell the parent when the fact on screen changes (keyed by generatedAt, so re-renders
+  // and countdown ticks don't fire it). The ref keeps a new callback identity from
+  // re-running the effect.
+  const onFactShownRef = useRef(onFactShown);
+  useEffect(() => {
+    onFactShownRef.current = onFactShown;
+  });
+  const shownAt = fact !== null && !pending ? fact.generatedAt : null;
+  useEffect(() => {
+    if (shownAt) onFactShownRef.current?.(shownAt);
+  }, [shownAt]);
 
   const loading = status === "loading";
   const showFact = fact !== null && !pending;

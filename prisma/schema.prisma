@@ -79,4 +79,6 @@ model Fact {
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, movieTitle, createdAt(sort: Desc)])
+  // Fact history: all of a user's facts, newest first, keyset-paginated on (createdAt, id).
+  @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
 }

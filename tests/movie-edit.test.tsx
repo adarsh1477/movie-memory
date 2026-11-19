@@ -38,15 +38,20 @@ let routes: {
   fact: (n: number) => Reply | Promise<Reply>;
   search: Reply;
   put: () => Reply | Promise<Reply>;
+  history: () => Reply | Promise<Reply>;
 };
 let fetchMock: ReturnType<typeof vi.fn>;
 
 function installFetch() {
   let factCalls = 0;
   fetchMock = vi.fn(async (url: string) => {
-    const r: Reply = url.startsWith("/api/fact")
+    // Match by exact path: "/api/facts/history" must not be answered as "/api/fact".
+    const path = url.split("?")[0];
+    const r: Reply = path === "/api/fact"
       ? await routes.fact(factCalls++)
-      : url.startsWith("/api/movies/search")
+      : path === "/api/facts/history"
+        ? await routes.history()
+        : url.startsWith("/api/movies/search")
         ? routes.search
         : url.startsWith("/api/me/movie")
           ? await routes.put()
@@ -56,7 +61,8 @@ function installFetch() {
   vi.stubGlobal("fetch", fetchMock);
 }
 
-const callsTo = (prefix: string) => fetchMock.mock.calls.filter(([url]) => String(url).startsWith(prefix));
+/** Calls to exactly this path (query string ignored). */
+const callsTo = (path: string) => fetchMock.mock.calls.filter(([url]) => String(url).split("?")[0] === path);
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -97,6 +103,7 @@ beforeEach(() => {
     fact: (n) => factFor(n === 0 ? "Heat" : "Alien", n === 0 ? "A Heat fact." : "An Alien fact."),
     search: ok({ results: [ALIEN], degraded: false }),
     put: () => meWith(ALIEN),
+    history: () => ok({ items: [], nextCursor: null }),
   };
   installFetch();
 });
@@ -294,6 +301,19 @@ describe("inline movie edit", () => {
       expect(titleArea.compareDocumentPosition(factArea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
+    it("the fact history sits below the title area too, so the dropdown paints over it", async () => {
+      await renderHero();
+      await openEditorAndSearch("alien");
+
+      const titleArea = screen.getByTestId("hero-title-area");
+      const historyArea = screen.getByTestId("hero-history-area");
+      expect(historyArea.classList).toContain("relative");
+      expect(historyArea.classList).toContain("z-0");
+      expect(historyArea.contains(screen.getByTestId("combobox-popup"))).toBe(false);
+      expect(titleArea.compareDocumentPosition(historyArea) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Fact history" })).toBeTruthy();
+    });
+
     it("no ancestor of the dropdown clips it", async () => {
       await renderHero();
       await openEditorAndSearch("alien");
@@ -335,6 +355,38 @@ describe("inline movie edit", () => {
       expect(callsTo("/api/me/movie")).toHaveLength(1);
       expect(heading().textContent).toBe("Alien1979");
     });
+  });
+
+  it("a new fact on the card refreshes the history once, with no extra fact requests", async () => {
+    const heatAt = new Date(T0).toISOString();
+    let historyCalls = 0;
+    routes.history = () => {
+      historyCalls++;
+      return ok({
+        items:
+          historyCalls === 1
+            ? [{ id: "h1", movieTitle: "Heat", content: "A Heat fact.", createdAt: heatAt }]
+            : [
+                { id: "h2", movieTitle: "Alien", content: "An Alien fact.", createdAt: new Date(Date.now()).toISOString() },
+                { id: "h1", movieTitle: "Heat", content: "A Heat fact.", createdAt: heatAt },
+              ],
+        nextCursor: null,
+      });
+    };
+    await renderHero();
+    expect(callsTo("/api/fact")).toHaveLength(1);
+    expect(callsTo("/api/facts/history")).toHaveLength(1); // first fact was already in page 1
+
+    await openEditorAndSearch("alien");
+    fireEvent.click(screen.getByRole("option", { name: /Alien/ }));
+    await flush();
+    await flush();
+
+    expect(callsTo("/api/fact")).toHaveLength(2); // just the new movie's fact
+    expect(callsTo("/api/facts/history")).toHaveLength(2); // one refresh for the new fact
+    const history = screen.getByTestId("hero-history-area");
+    expect(history.textContent).toContain("An Alien fact.");
+    expect(history.textContent).toContain("A Heat fact.");
   });
 
   it("an expired session redirects to /", async () => {

@@ -45,6 +45,10 @@ export const movieSearchRateLimiter = createRateLimiter(FACT_RATE_LIMIT);
 export const MOVIE_EDIT_RATE_LIMIT = { limit: 20, windowMs: 60_000 } as const;
 export const movieEditRateLimiter = createRateLimiter(MOVIE_EDIT_RATE_LIMIT);
 
+// Fact history (GET /api/facts/history): first page + refreshes + "Load more", own bucket.
+export const FACT_HISTORY_RATE_LIMIT = { limit: 30, windowMs: 60_000 } as const;
+export const factHistoryRateLimiter = createRateLimiter(FACT_HISTORY_RATE_LIMIT);
+
 export function consume(userId: string, now?: number): RateLimitResult {
   return factRateLimiter.consume(userId, now);
 }

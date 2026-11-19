@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import FactCard from "./FactCard";
+import FactHistory from "./FactHistory";
 import MovieSearchCombobox from "./MovieSearchCombobox";
 import { putMovie } from "@/lib/api";
 import { factCache } from "@/lib/client-cache";
@@ -110,6 +111,8 @@ export default function MovieHeroCard({ userId, movie }: { userId: string; movie
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState(movie.title);
+  // generatedAt of the fact on screen; the history refreshes when it changes.
+  const [latestFactAt, setLatestFactAt] = useState<string | null>(null);
 
   const pencil = useRef<HTMLButtonElement>(null);
   const returnFocus = useRef(false);
@@ -397,7 +400,19 @@ export default function MovieHeroCard({ userId, movie }: { userId: string; movie
                 movieTitle={committed.title}
                 displayTitle={displayTitle}
                 pending={saving}
+                onFactShown={setLatestFactAt}
               />
+            </div>
+
+            {/* Fact history — dashboard only. Same z-0 layer as the fact area, below the
+                z-20 title area, so the edit dropdown always paints over it. Keyed by user:
+                its list lives only in this component, never across users. */}
+            <div
+              className="relative z-0 motion-safe:animate-fade-up"
+              style={{ animationDelay: "240ms" }}
+              data-testid="hero-history-area"
+            >
+              <FactHistory key={userId} latestFactAt={latestFactAt} />
             </div>
           </div>
         </div>

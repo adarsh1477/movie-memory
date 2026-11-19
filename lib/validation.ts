@@ -111,6 +111,45 @@ export const FactResponse = z.object({
 });
 export type FactResponse = z.infer<typeof FactResponse>;
 
+// ── Fact history ──────────────────────────────────────────────────────────────
+
+export const HISTORY_DEFAULT_LIMIT = 10;
+export const HISTORY_MAX_LIMIT = 50;
+
+/** GET /api/facts/history query. Unknown params (e.g. a forged userId) are stripped. */
+export const FactHistoryQuery = z.object({
+  limit: z.preprocess(
+    (v) => (v === null || v === undefined || v === "" ? undefined : v),
+    z.coerce
+      .number({ invalid_type_error: "limit must be a number" })
+      .int("limit must be a whole number")
+      .min(1, "limit must be at least 1")
+      .max(HISTORY_MAX_LIMIT, `limit must be at most ${HISTORY_MAX_LIMIT}`)
+      .default(HISTORY_DEFAULT_LIMIT),
+  ),
+  // Fact ids are cuids. Validating the shape keeps junk out of the query entirely.
+  cursor: z.preprocess(
+    (v) => (v === null || v === "" ? undefined : v),
+    z.string().regex(/^[a-z0-9]{1,64}$/i, "Invalid cursor").optional(),
+  ),
+});
+export type FactHistoryQuery = z.infer<typeof FactHistoryQuery>;
+
+export const FactHistoryItem = z.object({
+  id: z.string(),
+  movieTitle: z.string(),
+  content: z.string(),
+  createdAt: z.string(), // ISO
+});
+export type FactHistoryItem = z.infer<typeof FactHistoryItem>;
+
+export const FactHistoryResponse = z.object({
+  items: z.array(FactHistoryItem).max(HISTORY_MAX_LIMIT),
+  /** Id of the last item to pass as ?cursor= for the next page; null when there is no more. */
+  nextCursor: z.string().nullable(),
+});
+export type FactHistoryResponse = z.infer<typeof FactHistoryResponse>;
+
 export const API_ERROR_CODES = [
   "UNAUTHORIZED",
   "VALIDATION",

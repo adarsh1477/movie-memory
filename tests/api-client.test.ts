@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { getFact, getMe, putMovie, searchMovies, NETWORK_ERROR_MESSAGE } from "@/lib/api";
+import { getFact, getFactHistory, getMe, putMovie, searchMovies, NETWORK_ERROR_MESSAGE } from "@/lib/api";
 import { AppErrorException } from "@/lib/errors";
 
 const FACT = {
@@ -121,6 +121,45 @@ describe("lib/api", () => {
   it("network failure → INTERNAL with a friendly message", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
     expect(await appError(getFact())).toEqual({ code: "INTERNAL", message: NETWORK_ERROR_MESSAGE });
+  });
+
+  // ── getFactHistory ─────────────────────────────────────────────────────────
+
+  const HISTORY = {
+    items: [{ id: "f2", movieTitle: "Heat", content: "A fact.", createdAt: "2026-11-18T12:00:00.000Z" }],
+    nextCursor: "f2",
+  };
+
+  it("getFactHistory builds the query string and parses the page", async () => {
+    respond(200, { ok: true, data: HISTORY });
+    await expect(getFactHistory({ limit: 10, cursor: "abc123" })).resolves.toEqual(HISTORY);
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe("/api/facts/history?limit=10&cursor=abc123");
+  });
+
+  it("getFactHistory omits empty params", async () => {
+    respond(200, { ok: true, data: { items: [], nextCursor: null } });
+    await getFactHistory();
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe("/api/facts/history");
+  });
+
+  it.each([
+    [401, { ok: false, error: { code: "UNAUTHORIZED", message: "Sign in required" } }, {}, "UNAUTHORIZED"],
+    [429, "", { "Retry-After": "4" }, "RATE_LIMITED"],
+    [400, { ok: false, error: { code: "VALIDATION", message: "Invalid cursor" } }, {}, "VALIDATION"],
+    [500, "<html>oops</html>", {}, "INTERNAL"],
+  ])("getFactHistory normalizes HTTP %i", async (status, body, headers, code) => {
+    respond(status, body, headers);
+    expect((await appError(getFactHistory())).code).toBe(code);
+  });
+
+  it("getFactHistory: network failure → INTERNAL", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    expect(await appError(getFactHistory())).toEqual({ code: "INTERNAL", message: NETWORK_ERROR_MESSAGE });
+  });
+
+  it("getFactHistory: a page that doesn't match the contract → INTERNAL", async () => {
+    respond(200, { ok: true, data: { items: [{ id: 1 }], nextCursor: null } });
+    expect((await appError(getFactHistory())).code).toBe("INTERNAL");
   });
 
   it("rethrows aborts untouched", async () => {
