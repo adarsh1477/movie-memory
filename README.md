@@ -33,10 +33,12 @@ pnpm install
 # Postgres 16 on localhost:5433 (5433, so it doesn't clash with a native Postgres on 5432)
 docker compose up -d
 
-# Environment: Prisma's CLI reads .env, Next.js reads .env.local
-cp .env.example .env
+# Environment: .env holds only DATABASE_URL (Prisma's CLI reads it);
+# .env.local holds everything else (Next.js reads it)
+# Create a file named .env containing exactly this one line:
+#   DATABASE_URL="postgresql://movie:movie@localhost:5433/movie_memory"
 cp .env.example .env.local
-# then fill in real values (see the table below)
+# then fill in real values in .env.local (see the table below)
 # Get a free TMDB Read Access Token first. Without it the app still runs, but the posters,
 # search and grounded facts are turned off.
 
@@ -69,7 +71,7 @@ Without `AUTH_TRUST_HOST=true`, Auth.js rejects requests under `pnpm start` with
 
 ## Environment variables
 
-Put the same values in both `.env` (used by the Prisma CLI) and `.env.local` (used by Next.js). Both files are git-ignored. `.env.example` contains placeholders only.
+`.env` contains only `DATABASE_URL` (the Prisma CLI reads it). `.env.local` contains all the other values (Next.js reads it). Both files are git-ignored. `.env.example` contains placeholders only.
 
 | Name | Required | What it is | How to get it |
 |---|---|---|---|
