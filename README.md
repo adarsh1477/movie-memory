@@ -37,6 +37,8 @@ docker compose up -d
 cp .env.example .env
 cp .env.example .env.local
 # then fill in real values (see the table below)
+# Get a free TMDB Read Access Token first. Without it the app still runs, but the posters,
+# search and grounded facts are turned off.
 
 pnpm prisma migrate dev     # applies all migrations and generates the Prisma client
 pnpm dev                    # development server: http://localhost:3000
@@ -79,7 +81,7 @@ Put the same values in both `.env` (used by the Prisma CLI) and `.env.local` (us
 | `OPENAI_MODEL` | Optional | Chat model for facts. Default `gpt-4.1-mini`. Must be a non-reasoning chat model (the request sends `max_tokens` and `temperature`). | For example `gpt-4.1-mini`, `gpt-4.1`, `gpt-4o-mini`. |
 | `MODEL_KNOWLEDGE_CUTOFF` | Optional | `YYYY-MM-DD`, default `2024-01-01`. Only matters when a film has no Wikipedia notes: films released before it fall back to model knowledge, later ones are grounded on TMDB data only. | Set it a few months before `OPENAI_MODEL`'s training cutoff, and update it when you change the model. |
 | `AUTH_TRUST_HOST` | Optional | Tells Auth.js to trust the request's host. Needed for a production build run locally with `pnpm start`, or behind a proxy. Not needed in `pnpm dev`; set automatically on Vercel. | Set to `true` (as in `.env.example`). |
-| `TMDB_API_KEY` | Optional (empty in `.env.example`) | TMDB **Read Access Token** (the Bearer token, not the v3 API key). Empty is treated the same as unset. | [developer.themoviedb.org](https://developer.themoviedb.org/) → Settings → API. |
+| `TMDB_API_KEY` | Strongly recommended (needed for the full experience; empty in `.env.example`) | TMDB **Read Access Token** (the Bearer token, not the v3 API key). Without it there's no movie search autocomplete, no posters or poster wall, and no Wikipedia-grounded facts, because those need TMDB details. Empty is treated the same as unset. | Free: [developer.themoviedb.org](https://developer.themoviedb.org/) → Settings → API → "API Read Access Token". |
 
 **Without `TMDB_API_KEY`** (left empty as in `.env.example`, or removed) the app still works with no errors, in a degraded mode: search reports itself unavailable and accepts the title as free text, there are no posters (a gradient fallback is shown), and facts for free-text titles use model knowledge only, since there are no TMDB details to look up Wikipedia with.
 
