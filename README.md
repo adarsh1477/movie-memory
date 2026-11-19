@@ -26,7 +26,7 @@ Movie Memory is a small full-stack app. You sign in with Google, pick your favor
 ### Steps
 
 ```bash
-git clone <your-fork-url> movie-memory
+git clone <repo-url> movie-memory
 cd movie-memory
 pnpm install
 
@@ -39,8 +39,10 @@ cp .env.example .env.local
 # then fill in real values (see the table below)
 
 pnpm prisma migrate dev     # applies all migrations and generates the Prisma client
-pnpm dev                    # http://localhost:3000
+pnpm dev                    # development server: http://localhost:3000
 ```
+
+That's the development setup. To run a production build instead, see [Production build](#production-build) below.
 
 ### Running checks
 
@@ -55,12 +57,13 @@ Set `SKIP_PG_TESTS=1` to skip the four real-Postgres suites when no database is 
 ### Production build
 
 ```bash
-# make sure .env.local contains AUTH_TRUST_HOST=true (see the table below)
+# same setup as above (database running, migrations applied), plus AUTH_TRUST_HOST=true in
+# .env.local: already there if you copied .env.example
 pnpm build
 pnpm start          # http://localhost:3000
 ```
 
-Without `AUTH_TRUST_HOST=true`, Auth.js rejects requests under `pnpm start` with `UntrustedHost` and Google sign-in fails. `pnpm dev` doesn't need it.
+Without `AUTH_TRUST_HOST=true`, Auth.js rejects requests under `pnpm start` with `UntrustedHost` and Google sign-in fails. `pnpm dev` doesn't need it (it's harmless there).
 
 ## Environment variables
 
@@ -79,6 +82,8 @@ Put the same values in both `.env` (used by the Prisma CLI) and `.env.local` (us
 | `TMDB_API_KEY` | Optional (empty in `.env.example`) | TMDB **Read Access Token** (the Bearer token, not the v3 API key). Empty is treated the same as unset. | [developer.themoviedb.org](https://developer.themoviedb.org/) → Settings → API. |
 
 **Without `TMDB_API_KEY`** (left empty as in `.env.example`, or removed) the app still works with no errors, in a degraded mode: search reports itself unavailable and accepts the title as free text, there are no posters (a gradient fallback is shown), and facts for free-text titles use model knowledge only, since there are no TMDB details to look up Wikipedia with.
+
+**Google sign-in in Testing mode:** if your OAuth consent screen's publishing status is "Testing", add your Google account under **Test users** (Google Cloud Console → APIs & Services → OAuth consent screen), or Google will block the sign-in.
 
 **Wikipedia needs no key.** It's read through the public MediaWiki API.
 
@@ -218,7 +223,7 @@ I built **both Variant A (backend robustness) and Variant B (frontend/API)**.
 - **No force-refresh parameter.** The 60-second window can't be bypassed from the client, which keeps OpenAI cost predictable. "New fact" just asks again; the server decides.
 - **TMDB validation with a free-text fallback.** Titles must be picked from TMDB search, which gives accurate titles, posters and details. Free text is accepted only when TMDB is down or has no match, so the app never blocks on a third party.
 - **Wikipedia-first grounding vs model memory.** Fact-checking showed the model writing false trivia from memory, including for *Dune: Part Two*, *Great Grand Masti* and *Spider-Man* (2002). The problem wasn't only recent films, so Wikipedia production notes are now the first source for every film, and model knowledge is a fallback only when no notes exist. The cost is up to 2 seconds on a cache miss, cached for 24 hours.
-- **The 60-second window belongs to the user and movie.** It isn't paused while the user is away. If facts are generated while a tab is open but the user isn't looking, none are lost: every fact is stored and appears in the history.
+- **The 60-second window belongs to the user and movie.** Facts are generated only when the dashboard requests one, and every generated fact is stored and appears in the history, so a fact the user didn't get to read is never lost.
 
 ## With 2 more hours, I would
 
@@ -230,6 +235,7 @@ I built **both Variant A (backend robustness) and Variant B (frontend/API)**.
 - **Add a verification step for knowledge-mode facts**, such as checking key claims against a source before storing them.
 - **Virtualize the history list**, or move long histories to their own page.
 - **Add `next build` and end-to-end tests** (for example Playwright) to CI.
+- **Reduce the poster wall's DOM size.** It renders 360 images, so the landing HTML is about 1 MB. Fewer posters per row with a CSS-looped animation and a smaller srcset would cut that a lot.
 
 ## Known limitations
 
@@ -252,6 +258,12 @@ I built **both Variant A (backend robustness) and Variant B (frontend/API)**.
 - **Real Postgres (4 suites):** concurrency (a burst of requests produces exactly one OpenAI call; the timeout order holds), authorization at the service and route level (no cross-user access), and history pagination. They use the Docker database, or `PG_TEST_URL` if set; `SKIP_PG_TESTS=1` skips them.
 - **Network guard:** `vitest.setup.ts` makes any test that tries to reach `api.openai.com`, `api.themoviedb.org` or `en.wikipedia.org` fail, so the suite never calls a real service or spends money.
 - **CI:** `.github/workflows/ci.yml` runs on every push and pull request with a Postgres 16 service and dummy secrets: install, `prisma generate`, `prisma migrate deploy`, typecheck, lint and the full test suite.
+- **Production build:** the production build was checked: `pnpm build` passes with no errors, and with `pnpm start` a signed-out `GET /` has a median server time of about 40ms over 10 requests (the first request, which fetches the TMDB poster pool, about 290ms).
+
+## More
+
+- [AI_USAGE.md](AI_USAGE.md): how I used AI tools while building this.
+- Walkthrough video: (link to be added)
 
 ## Credits
 
