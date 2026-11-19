@@ -273,7 +273,7 @@ I built **both Variant A (backend robustness) and Variant B (frontend/API)**.
 ## More
 
 - [AI_USAGE.md](AI_USAGE.md): how I used AI tools while building this.
-- Walkthrough video: (link to be added)
+- Walkthrough video: https://youtu.be/Wqur28GH5Dw
 
 ## Credits
 
