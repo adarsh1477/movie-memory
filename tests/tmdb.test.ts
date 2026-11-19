@@ -28,6 +28,35 @@ afterEach(() => {
   delete process.env.TMDB_API_KEY;
 });
 
+// .env.example ships `TMDB_API_KEY=` (empty): it must behave exactly like unset.
+describe("an empty TMDB_API_KEY is treated as unset", () => {
+  beforeEach(() => {
+    process.env.TMDB_API_KEY = "";
+  });
+
+  it("search degrades (free text allowed) with no fetch and no error", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    await expect(searchMovies("heat")).resolves.toEqual({ results: [], degraded: true });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("movie details are null (facts use knowledge mode) with no fetch", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    await expect(fetchMovieDetails(1)).resolves.toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("trending posters are empty (gradient fallback) with no fetch", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(getTrendingPosters()).resolves.toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("getTrendingPosters", () => {
   it("returns poster paths from a successful response", async () => {
     stubFetch({

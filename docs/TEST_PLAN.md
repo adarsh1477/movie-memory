@@ -1,6 +1,6 @@
 # Test Plan
 
-Vitest + React Testing Library. 27 suites (563 tests). Four suites run against the real Docker Postgres; everything else mocks Prisma, `auth()`, OpenAI, TMDB, Wikipedia or `fetch`.
+Vitest + React Testing Library. 27 suites (567 tests). Four suites run against the real Docker Postgres; everything else mocks Prisma, `auth()`, OpenAI, TMDB, Wikipedia or `fetch`.
 
 Run: `pnpm test` (about 21s, mostly the 7s and 11s lock tests). Skip the Postgres suites with `SKIP_PG_TESTS=1`; point them elsewhere with `PG_TEST_URL`. They only touch users they create and delete them afterwards.
 
@@ -44,7 +44,7 @@ Sets dummy values for every required env var **before any test file is imported*
 | 18d | `client-cache.test.ts` | Expiry = `min(fetchedAt + 30s, generatedAt + 60s)`: fetched at age 0s → 30s; at age 59s → 1s; at age 45s → window end; server-clock correction both ways (browser 10s fast / slow); `stale: true` never a hit; expired entries dropped; keys, `deleteMovie`, `clear` | Variant B §3 |
 | 18e | `fact-card.test.tsx` (fake timers) | Never past the window: age-59s fact is a hit for 1s then skeleton + fetch; age-0s fact until 30s; remount at 70s shows the skeleton, never the old fact; clock-offset expiry; `stale: true` still shown with the hint but never from the cache; auto-swap goes to the server even with a cache entry; timer rescheduled per new fact (no leftover fire); late load after a hidden tab shows the skeleton, and on failure the old fact only with the stale hint; on-time swap keeps the fact visible | Freshness invariant |
 | 19 | `movie-search-route.test.ts` | Search: auth, `q` 2–100 after trim, degraded passthrough, own rate-limit bucket, `no-store` | Movie search |
-| 20 | `tmdb.test.ts` | Trending wall failures → `[]`; search parsing, 6-result cap, unsafe poster dropped, every failure → `degraded`; movie details mapping (top 5 cast by order, directors, runtime 0 → null, keywords de-duplicated; one call with `credits,keywords`), failures → `null`; 24h cache, shared in-flight request, failures not cached, eviction | Movie search; posters; fact grounding |
+| 20 | `tmdb.test.ts` | An empty `TMDB_API_KEY` (as shipped in `.env.example`) behaves like unset: search degraded, details null, no posters, no fetch, and `lib/env` parses it without error (`env.test.ts`). Trending wall failures → `[]`; search parsing, 6-result cap, unsafe poster dropped, every failure → `degraded`; movie details mapping (top 5 cast by order, directors, runtime 0 → null, keywords de-duplicated; one call with `credits,keywords`), failures → `null`; 24h cache, shared in-flight request, failures not cached, eviction | Movie search; posters; fact grounding |
 | 21 | `movie-form.test.ts` | Onboarding form parsing; forged `tmdbId` / `year` / `posterPath` rejected | Security §1 |
 | 22 | `movie-search-combobox.test.tsx` | 300ms debounce, stale request aborted, arrows/Enter/Escape, empty and degraded states | Movie search UI; a11y |
 | 23 | `onboarding-form.test.tsx` | Continue disabled until text; selected-movie preview; Change clears the selection | Onboarding UI |

@@ -13,7 +13,7 @@ Movie Memory is a small full-stack app. You sign in with Google, pick your favor
 - Inline edit of the favorite movie on the dashboard, with optimistic update and revert on error.
 - Fact history: cursor-paginated, 5 per page, with Load more and Show less.
 - A typed API client and Zod validation on every input and response.
-- 563 tests across 27 suites, including real-Postgres concurrency tests, and a GitHub Actions workflow.
+- 567 tests across 27 suites, including real-Postgres concurrency tests, and a GitHub Actions workflow.
 
 ## Setup
 
@@ -65,9 +65,9 @@ Put the same values in both `.env` (used by the Prisma CLI) and `.env.local` (us
 | `OPENAI_API_KEY` | Required | OpenAI API key. Used only on the server. | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 | `OPENAI_MODEL` | Optional | Chat model for facts. Default `gpt-4.1-mini`. Must be a non-reasoning chat model (the request sends `max_tokens` and `temperature`). | For example `gpt-4.1-mini`, `gpt-4.1`, `gpt-4o-mini`. |
 | `MODEL_KNOWLEDGE_CUTOFF` | Optional | `YYYY-MM-DD`, default `2024-01-01`. Only matters when a film has no Wikipedia notes: films released before it fall back to model knowledge, later ones are grounded on TMDB data only. | Set it a few months before `OPENAI_MODEL`'s training cutoff, and update it when you change the model. |
-| `TMDB_API_KEY` | Optional | TMDB **Read Access Token** (the Bearer token, not the v3 API key). | [developer.themoviedb.org](https://developer.themoviedb.org/) → Settings → API. |
+| `TMDB_API_KEY` | Optional (empty in `.env.example`) | TMDB **Read Access Token** (the Bearer token, not the v3 API key). Empty is treated the same as unset. | [developer.themoviedb.org](https://developer.themoviedb.org/) → Settings → API. |
 
-**Without `TMDB_API_KEY`** (remove the line or leave it empty; don't keep the placeholder) the app still works, in a degraded mode: search reports itself unavailable and accepts the title as free text, there are no posters (a gradient fallback is shown), and facts for free-text titles use model knowledge only, since there are no TMDB details to look up Wikipedia with.
+**Without `TMDB_API_KEY`** (left empty as in `.env.example`, or removed) the app still works with no errors, in a degraded mode: search reports itself unavailable and accepts the title as free text, there are no posters (a gradient fallback is shown), and facts for free-text titles use model knowledge only, since there are no TMDB details to look up Wikipedia with.
 
 **Wikipedia needs no key.** It's read through the public MediaWiki API.
 
@@ -195,7 +195,7 @@ I built **both Variant A (backend robustness) and Variant B (frontend/API)**.
 - **Variant A:** the 60-second database-backed cache, burst protection with the advisory lock and the timeout invariant, the stale fallback, and tests for all of them (including real-Postgres concurrency tests).
 - **Variant B:** the typed API client (`lib/api.ts`) with Zod-validated responses, inline movie editing with optimistic update and revert, the 30-second client cache tied to the server window, and their tests.
 
-**Why both:** the two halves depend on each other. The client cache is only correct because it's bounded by the server's 60-second window, and the countdown and auto-swap only make sense if the server reliably serves one fact per window even under bursts. Building one side alone would have meant guessing at the other side's contract. I was also encouraged to go beyond the brief, so I added TMDB search, Wikipedia grounding, fact history and CI.
+**Why both:** the two halves depend on each other. The client cache is only correct because it's bounded by the server's 60-second window, and the countdown and auto-swap only make sense if the server reliably serves one fact per window even under bursts. Building one side alone would have meant guessing at the other side's contract, and building both shows the full path from the database to the UI. Beyond the two variants I added TMDB search, Wikipedia grounding, fact history and CI.
 
 ## Key tradeoffs
 
@@ -231,7 +231,7 @@ I built **both Variant A (backend robustness) and Variant B (frontend/API)**.
 
 ## Testing
 
-**563 tests across 27 suites** (Vitest + React Testing Library). [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md) maps each one to the behavior it covers.
+**567 tests across 27 suites** (Vitest + React Testing Library). [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md) maps each one to the behavior it covers.
 
 - **Fact service:** cache hit and miss, the 60-second boundary, stale fallback on OpenAI failure and lock timeout, refusal handling and retries, the mode matrix (Wikipedia notes or not, before or after the cutoff, free text), the avoid list and angle rotation, logging without personal data.
 - **External services:** TMDB and Wikipedia parsing, matching, timeouts, caching and degraded behavior; the OpenAI client's deadline and output trimming.

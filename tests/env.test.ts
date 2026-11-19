@@ -55,6 +55,12 @@ describe("lib/env", () => {
       await expect(loadEnv({ OPENAI_MODEL: value })).rejects.toThrow(/OPENAI_MODEL/);
     });
 
+    it("TMDB_API_KEY is optional: unset and empty both parse without error", async () => {
+      await expect(loadEnv({ TMDB_API_KEY: undefined })).resolves.toBeTruthy();
+      const empty = await loadEnv({ TMDB_API_KEY: "" });
+      expect(empty.env.TMDB_API_KEY).toBe("");
+    });
+
     it("MODEL_KNOWLEDGE_CUTOFF defaults to 2024-01-01 when unset or blank", async () => {
       const unset = await loadEnv({ MODEL_KNOWLEDGE_CUTOFF: undefined });
       expect(unset.DEFAULT_MODEL_KNOWLEDGE_CUTOFF).toBe("2024-01-01");
