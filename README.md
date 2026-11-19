@@ -26,7 +26,7 @@ Movie Memory is a small full-stack app. You sign in with Google, pick your favor
 ### Steps
 
 ```bash
-git clone <repo-url> movie-memory
+git clone https://github.com/adarsh1477/movie-memory.git movie-memory
 cd movie-memory
 pnpm install
 
@@ -253,7 +253,6 @@ I built **both Variant A (backend robustness) and Variant B (frontend/API)**.
 - **The poster cache is per server instance.** The landing wall's TMDB pool (1 hour) lives in each server process's memory, so each instance fetches its own pool and a restart starts empty.
 - **Facts are keyed by title**, not by TMDB id, so two films with the same title share a cache window and history.
 - **The knowledge cutoff must follow the model.** If `OPENAI_MODEL` changes, update `MODEL_KNOWLEDGE_CUTOFF` to a date comfortably before the new model's training cutoff.
-- CI runs on GitHub Actions (Postgres 16 service, typecheck, lint, tests) and passes on main.
 
 ## Testing
 
