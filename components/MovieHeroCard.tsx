@@ -405,14 +405,16 @@ export default function MovieHeroCard({ userId, movie }: { userId: string; movie
             </div>
 
             {/* Fact history — dashboard only. Same z-0 layer as the fact area, below the
-                z-20 title area, so the edit dropdown always paints over it. Keyed by user:
-                its list lives only in this component, never across users. */}
+                z-20 title area, so the edit dropdown always paints over it. Its list lives
+                only in this component, never across users or movies. */}
             <div
               className="relative z-0 motion-safe:animate-fade-up"
               style={{ animationDelay: "240ms" }}
               data-testid="hero-history-area"
             >
-              <FactHistory key={userId} latestFactAt={latestFactAt} />
+              {/* Keyed by user AND confirmed movie: a movie change (or another user) remounts it
+                  with a fresh "latest 5". Sign-out unmounts it. */}
+              <FactHistory key={`${userId}:${committed.title}`} latestFactAt={latestFactAt} />
             </div>
           </div>
         </div>

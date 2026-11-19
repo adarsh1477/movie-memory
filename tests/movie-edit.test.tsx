@@ -383,10 +383,41 @@ describe("inline movie edit", () => {
     await flush();
 
     expect(callsTo("/api/fact")).toHaveLength(2); // just the new movie's fact
-    expect(callsTo("/api/facts/history")).toHaveLength(2); // one refresh for the new fact
+    // The movie change remounts the history (keyed by movie): one fresh "latest 5" request,
+    // which already contains the new fact, so no extra refresh is needed.
+    expect(callsTo("/api/facts/history")).toHaveLength(2);
     const history = screen.getByTestId("hero-history-area");
     expect(history.textContent).toContain("An Alien fact.");
     expect(history.textContent).toContain("A Heat fact.");
+  });
+
+  it("a movie change resets an expanded history to the latest 5", async () => {
+    const at = (minutesAgo: number) => new Date(T0 - minutesAgo * 60_000).toISOString();
+    const h = (n: number) => ({ id: `h${n}`, movieTitle: "Heat", content: `Heat fact ${n}.`, createdAt: at(n) });
+    // h0 is the fact on the card (generatedAt = now), so page 1 already contains it and no
+    // refresh is triggered; call 2 is the Load more, call 3 the remount after the movie change.
+    let call = 0;
+    routes.history = () => {
+      call++;
+      if (call === 1) return ok({ items: [0, 1, 2, 3, 4].map(h), nextCursor: "h4" });
+      if (call === 2) return ok({ items: [5, 6, 7].map(h), nextCursor: null });
+      return ok({ items: [0, 1, 2, 3, 4].map(h), nextCursor: "h4" });
+    };
+    await renderHero();
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await flush();
+    const history = () => screen.getByTestId("hero-history-area");
+    expect(history().querySelectorAll("article")).toHaveLength(8);
+
+    await openEditorAndSearch("alien");
+    fireEvent.click(screen.getByRole("option", { name: /Alien/ }));
+    await flush();
+    await flush();
+
+    expect(history().querySelectorAll("article")).toHaveLength(5);
+    const historyUrls = callsTo("/api/facts/history").map(([u]) => String(u));
+    expect(historyUrls.at(-1)).toBe("/api/facts/history?limit=5"); // a fresh first page, no cursor
+    expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
   });
 
   it("an expired session redirects to /", async () => {

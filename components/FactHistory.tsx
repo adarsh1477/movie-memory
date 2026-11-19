@@ -27,20 +27,32 @@ const toAppError = (err: unknown): AppError =>
   err instanceof AppErrorException ? err.error : { code: "INTERNAL", message: "Something went wrong. Please try again." };
 
 /**
- * Put a refreshed first page in front of what's already loaded, without duplicates.
- * If the new page doesn't overlap the old list (more new facts than one page), there's a
- * gap we can't see, so start over from the new page and its cursor.
+ * Applies a refreshed first page (after a new fact) to the list on screen.
+ *
+ * - Not expanded (the user never clicked "Load more"): the list IS the latest page, so
+ *   replace it — the new fact on top, the oldest one dropped — and take the page's own
+ *   nextCursor (its last item), which is exactly where "Load more" should continue.
+ * - Expanded: keep every page already loaded and put new facts on top, without duplicates.
+ *   The old cursor still points at the oldest loaded item, so "Load more" stays correct.
+ *   If the new page doesn't overlap the list at all (more new facts than one page), there's
+ *   a gap we can't see, so start over from the new page and collapse.
  */
-function mergeFirstPage(
+export function applyRefresh(
   existing: FactHistoryItem[],
   existingCursor: string | null,
+  expanded: boolean,
   page: FactHistoryResponse,
-): { items: FactHistoryItem[]; nextCursor: string | null } {
-  if (existing.length === 0) return { items: page.items, nextCursor: page.nextCursor };
+): { items: FactHistoryItem[]; nextCursor: string | null; expanded: boolean } {
+  const fresh = { items: page.items, nextCursor: page.nextCursor, expanded: false };
+  if (!expanded || existing.length === 0) return fresh;
   const pageIds = new Set(page.items.map((i) => i.id));
   const overlaps = existing.some((i) => pageIds.has(i.id));
-  if (!overlaps && page.nextCursor) return { items: page.items, nextCursor: page.nextCursor };
-  return { items: [...page.items, ...existing.filter((i) => !pageIds.has(i.id))], nextCursor: existingCursor };
+  if (!overlaps && page.nextCursor) return fresh;
+  return {
+    items: [...page.items, ...existing.filter((i) => !pageIds.has(i.id))],
+    nextCursor: existingCursor,
+    expanded: true,
+  };
 }
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
@@ -76,6 +88,8 @@ type State = {
   error: AppError | null;
   loadingMore: boolean;
   moreError: AppError | null;
+  /** The user has clicked "Load more": refreshes keep the loaded pages instead of resetting to page 1. */
+  expanded: boolean;
   /** Polite announcement for screen readers ("Loaded 10 more facts."). */
   announcement: string;
 };
@@ -87,6 +101,7 @@ const INITIAL: State = {
   error: null,
   loadingMore: false,
   moreError: null,
+  expanded: false,
   announcement: "",
 };
 
@@ -137,8 +152,10 @@ export default function FactHistory({ latestFactAt, pageSize = HISTORY_PAGE_SIZE
         .then((page) => {
           if (controller.signal.aborted) return;
           setState((prev) => {
-            const merged = refresh ? mergeFirstPage(prev.items, prev.nextCursor, page) : page;
-            return { ...prev, status: "ready", error: null, items: merged.items, nextCursor: merged.nextCursor };
+            const next = refresh
+              ? applyRefresh(prev.items, prev.nextCursor, prev.expanded, page)
+              : { items: page.items, nextCursor: page.nextCursor, expanded: false };
+            return { ...prev, status: "ready", error: null, ...next };
           });
         })
         .catch((err: unknown) => {
@@ -182,7 +199,9 @@ export default function FactHistory({ latestFactAt, pageSize = HISTORY_PAGE_SIZE
     if (!nextCursor || loadingMore) return;
     const controller = new AbortController();
     morePage.current = controller;
-    setState((prev) => ({ ...prev, loadingMore: true, moreError: null, announcement: "" }));
+    // Expanded from the click itself: a refresh that lands while this request is in flight
+    // must merge, not reset to page 1 (resetting would leave a gap before the appended page).
+    setState((prev) => ({ ...prev, loadingMore: true, moreError: null, expanded: true, announcement: "" }));
 
     getFactHistory({ limit: pageSize, cursor: nextCursor }, controller.signal)
       .then((page) => {

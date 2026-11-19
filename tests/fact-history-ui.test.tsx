@@ -198,6 +198,95 @@ describe("FactHistory Load more", () => {
   });
 });
 
+describe("FactHistory stays at 5 until Load more", () => {
+  /** f<n> is n minutes old: a higher number is older. */
+  const latest = (newest: number, count = 5) => Array.from({ length: count }, (_, i) => item(`f${newest + i}`, newest + i));
+  const ids = () => listItems().map((li) => li.querySelector("p")?.textContent?.replace(/^Fact (f\d+)\.$/, "$1"));
+
+  it("after 3 new facts without Load more, exactly the latest 5 are shown", async () => {
+    // Page 1 at start: f3..f7. Then three new facts (f2, f1, f0), each refresh returns the latest 5.
+    replies(page(latest(3), "f7"), page(latest(2), "f6"), page(latest(1), "f5"), page(latest(0), "f4"));
+    const { rerender } = render(<FactHistory latestFactAt={iso(T0 - 3 * 60_000)} />);
+    await flush();
+    expect(ids()).toEqual(["f3", "f4", "f5", "f6", "f7"]);
+
+    for (const minutesAgo of [2, 1, 0]) {
+      rerender(<FactHistory latestFactAt={iso(T0 - minutesAgo * 60_000)} />);
+      await flush();
+      expect(listItems()).toHaveLength(5);
+    }
+
+    expect(ids()).toEqual(["f0", "f1", "f2", "f3", "f4"]); // new facts on top, oldest dropped
+    expect(listItems()[0].textContent).toContain("Now showing");
+    expect(fetchMock).toHaveBeenCalledTimes(4); // 1 first page + exactly 1 per new fact
+  });
+
+  it("the Load more cursor follows the list after a reset (no gap, no repeat)", async () => {
+    replies(page(latest(3), "f7"), page(latest(2), "f6"), page(latest(7, 2), null));
+    const { rerender } = render(<FactHistory latestFactAt={iso(T0 - 3 * 60_000)} />);
+    await flush();
+    rerender(<FactHistory latestFactAt={iso(T0 - 2 * 60_000)} />);
+    await flush();
+    expect(ids()).toEqual(["f2", "f3", "f4", "f5", "f6"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await flush();
+
+    expect(urls().at(-1)).toBe("/api/facts/history?limit=5&cursor=f6"); // continues right after f6
+    expect(ids()).toEqual(["f2", "f3", "f4", "f5", "f6", "f7", "f8"]);
+    expect(new Set(ids()).size).toBe(7);
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+  });
+
+  it("after Load more, the extra items stay and new facts go on top, without duplicates", async () => {
+    replies(
+      page(latest(3), "f7"), // f3..f7
+      page(latest(8), "f12"), // Load more: f8..f12
+      page(latest(2), "f6"), // new fact f2: latest 5 = f2..f6
+      page(latest(1), "f5"), // new fact f1
+    );
+    const { rerender } = render(<FactHistory latestFactAt={iso(T0 - 3 * 60_000)} />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await flush();
+    expect(listItems()).toHaveLength(10);
+
+    rerender(<FactHistory latestFactAt={iso(T0 - 2 * 60_000)} />);
+    await flush();
+    rerender(<FactHistory latestFactAt={iso(T0 - 60_000)} />);
+    await flush();
+
+    expect(ids()).toEqual(["f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12"]);
+    expect(new Set(ids()).size).toBe(12);
+    expect(fetchMock).toHaveBeenCalledTimes(4); // no extra requests
+    // Load more still continues after the oldest loaded item.
+    expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
+  });
+
+  it("a refresh that lands while Load more is in flight merges instead of resetting", async () => {
+    const more = pending();
+    replies(page(latest(3), "f7"), more.promise, page(latest(2), "f6"));
+    const { rerender } = render(<FactHistory latestFactAt={iso(T0 - 3 * 60_000)} />);
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    rerender(<FactHistory latestFactAt={iso(T0 - 2 * 60_000)} />); // new fact while loading more
+    await flush();
+    more.resolve(page(latest(8, 2), null));
+    await flush();
+
+    expect(ids()).toEqual(["f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9"]); // nothing lost, nothing twice
+  });
+
+  it("shows Load more only while there are older facts", async () => {
+    replies(page(latest(0, 3), null));
+    render(<FactHistory latestFactAt={null} />);
+    await flush();
+    expect(listItems()).toHaveLength(3);
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+  });
+});
+
 describe("FactHistory refresh on a new fact", () => {
   it("refreshes page 1 once when a new fact is shown, prepending it without duplicates", async () => {
     replies(page([item("f2", 1), item("f1", 2)], null), page([item("f3", 0, "Brand new."), item("f2", 1), item("f1", 2)], null));
