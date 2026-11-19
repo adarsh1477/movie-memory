@@ -55,12 +55,12 @@ describe("lib/env", () => {
       await expect(loadEnv({ OPENAI_MODEL: value })).rejects.toThrow(/OPENAI_MODEL/);
     });
 
-    it("MODEL_KNOWLEDGE_CUTOFF defaults to 2024-06-01 when unset or blank", async () => {
+    it("MODEL_KNOWLEDGE_CUTOFF defaults to 2024-01-01 when unset or blank", async () => {
       const unset = await loadEnv({ MODEL_KNOWLEDGE_CUTOFF: undefined });
-      expect(unset.DEFAULT_MODEL_KNOWLEDGE_CUTOFF).toBe("2024-06-01");
-      expect(unset.env.MODEL_KNOWLEDGE_CUTOFF).toBe("2024-06-01");
+      expect(unset.DEFAULT_MODEL_KNOWLEDGE_CUTOFF).toBe("2024-01-01");
+      expect(unset.env.MODEL_KNOWLEDGE_CUTOFF).toBe("2024-01-01");
       const blank = await loadEnv({ MODEL_KNOWLEDGE_CUTOFF: " " });
-      expect(blank.env.MODEL_KNOWLEDGE_CUTOFF).toBe("2024-06-01");
+      expect(blank.env.MODEL_KNOWLEDGE_CUTOFF).toBe("2024-01-01");
     });
 
     it("MODEL_KNOWLEDGE_CUTOFF accepts and trims a YYYY-MM-DD date", async () => {

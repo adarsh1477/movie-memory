@@ -12,8 +12,10 @@ import {
   type FactPromptInput,
 } from "@/lib/fact-prompt";
 import type { MovieDetails } from "@/lib/tmdb";
+import { DEFAULT_MODEL_KNOWLEDGE_CUTOFF } from "@/lib/env";
 
-const CUTOFF = "2024-06-01";
+// The real default, so these boundary cases track it.
+const CUTOFF = DEFAULT_MODEL_KNOWLEDGE_CUTOFF;
 const TODAY = "2026-11-18";
 
 const details = (over: Partial<MovieDetails> = {}): MovieDetails => ({
@@ -37,8 +39,10 @@ describe("chooseFactMode", () => {
   it.each<[string, MovieDetails | null, "knowledge" | "grounded"]>([
     ["no TMDB details (free-text title)", null, "knowledge"],
     ["released well before the cutoff", details(), "knowledge"],
-    ["released the day before the cutoff", details({ releaseDate: "2024-05-31" }), "knowledge"],
-    ["released on the cutoff date", details({ releaseDate: "2024-06-01" }), "grounded"],
+    ["released the day before the cutoff (2023-12-31)", details({ releaseDate: "2023-12-31" }), "knowledge"],
+    ["released on the cutoff date (2024-01-01)", details({ releaseDate: "2024-01-01" }), "grounded"],
+    ["released 2024-03-01, like Dune: Part Two", details({ title: "Dune: Part Two", releaseDate: "2024-03-01" }), "grounded"],
+    ["released mid-2024 (knowledge under the old 2024-06-01 cutoff)", details({ releaseDate: "2024-05-31" }), "grounded"],
     ["released after the cutoff", details({ releaseDate: "2025-03-07" }), "grounded"],
     ["in production", details({ status: "In Production", releaseDate: "2026-12-18" }), "grounded"],
     ["post production, date in the past", details({ status: "Post Production", releaseDate: "2020-01-01" }), "grounded"],
@@ -48,6 +52,10 @@ describe("chooseFactMode", () => {
     ["'Released' but dated in the future", details({ releaseDate: "2027-01-01" }), "grounded"],
   ])("%s → %s", (_label, d, expected) => {
     expect(chooseFactMode(d, CUTOFF, TODAY)).toBe(expected);
+  });
+
+  it("defaults to 2024-01-01", () => {
+    expect(DEFAULT_MODEL_KNOWLEDGE_CUTOFF).toBe("2024-01-01");
   });
 
   it("treats undefined details like null", () => {

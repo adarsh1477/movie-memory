@@ -204,7 +204,7 @@ describe("movie year", () => {
 
 describe("fact mode", () => {
   it("uses knowledge mode for a released film from before the cutoff", async () => {
-    await getFactForUser("userA", deps); // Heat, 1995-12-15, cutoff 2024-06-01
+    await getFactForUser("userA", deps); // Heat, 1995-12-15, default cutoff 2024-01-01
     expect(openai.mock.calls[0][0].mode).toBe("knowledge");
   });
 
@@ -217,6 +217,18 @@ describe("fact mode", () => {
     movieDetails.mockResolvedValueOnce({ ...HEAT_DETAILS, status: "Post Production", releaseDate: "2026-12-18" });
     await getFactForUser("userA", deps);
     expect(openai.mock.calls[0][0].mode).toBe("grounded");
+  });
+
+  it("uses grounded mode for Dune: Part Two (released 2024-03-01) under the default cutoff", async () => {
+    movieDetails.mockResolvedValueOnce({ ...HEAT_DETAILS, title: "Dune: Part Two", releaseDate: "2024-03-01" });
+    await getFactForUser("userA", deps); // no knowledgeCutoff override: the env default applies
+    expect(openai.mock.calls[0][0].mode).toBe("grounded");
+  });
+
+  it("uses knowledge mode for a film released 2023-12-31 under the default cutoff", async () => {
+    movieDetails.mockResolvedValueOnce({ ...HEAT_DETAILS, releaseDate: "2023-12-31" });
+    await getFactForUser("userA", deps);
+    expect(openai.mock.calls[0][0].mode).toBe("knowledge");
   });
 
   it("uses grounded mode for a film released after the configured cutoff", async () => {

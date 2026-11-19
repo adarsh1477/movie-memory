@@ -90,7 +90,7 @@ export const env: {
   GOOGLE_CLIENT_SECRET: string
   OPENAI_API_KEY: string
   OPENAI_MODEL: string                // optional — blank/unset → "gpt-4.1-mini"; non-reasoning chat model
-  MODEL_KNOWLEDGE_CUTOFF: string      // optional — YYYY-MM-DD, blank/unset → "2024-06-01"
+  MODEL_KNOWLEDGE_CUTOFF: string      // optional — YYYY-MM-DD, blank/unset → "2024-01-01"
   TMDB_API_KEY: string | undefined   // optional — absent → search degraded, no TMDB fact context
   NODE_ENV: 'development' | 'production' | 'test'
 }

@@ -1,7 +1,9 @@
 import { z } from "zod";
 
 export const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
-export const DEFAULT_MODEL_KNOWLEDGE_CUTOFF = "2024-06-01";
+// Deliberately earlier than the model's real training cutoff: films released close to it
+// are where knowledge mode states false trivia (see docs/DECISIONS.md). Update with OPENAI_MODEL.
+export const DEFAULT_MODEL_KNOWLEDGE_CUTOFF = "2024-01-01";
 
 const blankToUndefined = (v: unknown) => (typeof v === "string" && v.trim() === "" ? undefined : v);
 
@@ -9,7 +11,7 @@ const isoDate = (name: string) =>
   z
     .string()
     .trim()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, `${name} must be a date like 2024-06-01`)
+    .regex(/^\d{4}-\d{2}-\d{2}$/, `${name} must be a date like 2024-01-01`)
     .refine((s) => {
       const d = new Date(`${s}T00:00:00Z`);
       return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
