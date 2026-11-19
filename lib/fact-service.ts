@@ -99,17 +99,13 @@ export async function getFactForUser(userId: string, deps: FactServiceDeps = {})
     log.info({ event: "fact.tmdb_context", ok: details !== null, durationMs: clock.now() - detailsStart });
   }
 
-  // Strategy is decided in code, not by the model: a pure function of the TMDB data and
-  // the date, so deciding it before the lock is the same as deciding it inside.
-  const today = new Date(clock.now()).toISOString().slice(0, 10);
-  const mode = chooseFactMode(details, knowledgeCutoff, today);
-
-  // Grounded mode only: production notes from the film's Wikipedia article, as a second
-  // source. Also BEFORE the lock (≤2s, cached 24h incl. misses, shared in flight), so the
-  // lock timing and the OpenAI 8s < lock 10s < tx 20s invariant are unchanged.
-  // Any failure or no match: TMDB-only, exactly as without it.
+  // Wikipedia first, for every film with TMDB details: production notes from the film's
+  // article are the preferred source, old film or new. BEFORE the lock (≤2s, cached 24h
+  // incl. misses, shared in flight), so the lock timing and the OpenAI 8s < lock 10s <
+  // tx 20s invariant are unchanged. Any failure or no match: no notes, and the mode falls
+  // back to the date rule below.
   let wikipedia: string | null = null;
-  if (mode === "grounded" && details) {
+  if (details) {
     const wikiStart = clock.now();
     const releaseYear = details.releaseDate ? Number(details.releaseDate.slice(0, 4)) : null;
     const result = await loadWikipedia({
@@ -125,6 +121,12 @@ export async function getFactForUser(userId: string, deps: FactServiceDeps = {})
       durationMs: clock.now() - wikiStart,
     });
   }
+
+  // Strategy is decided in code, not by the model: a pure function of the TMDB data, the
+  // notes and the date. With notes → grounded; without → knowledge for older films,
+  // grounded (TMDB only) for newer ones; free text → knowledge.
+  const today = new Date(clock.now()).toISOString().slice(0, 10);
+  const mode = chooseFactMode(details, knowledgeCutoff, today, wikipedia !== null);
 
   log.info({ event: "fact.lock_wait_start", durationMs: elapsed() });
   const lockWaitStart = clock.now();
@@ -145,7 +147,9 @@ export async function getFactForUser(userId: string, deps: FactServiceDeps = {})
 
           // The topic is decided here, in code (it depends on the user's fact count).
           const angle = pickAngle(await tx.fact.count({ where: { userId, movieTitle } }), mode);
-          const call = { model: OPENAI_MODEL, mode, angle };
+          // Which sources the model was given (no personal data): mode, and whether
+          // Wikipedia notes were included. usedMode below says which prompt produced it.
+          const call = { model: OPENAI_MODEL, mode, angle, wikipediaNotes: wikipedia !== null };
 
           const callStart = clock.now();
           let content: string;

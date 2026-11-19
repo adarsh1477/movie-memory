@@ -125,13 +125,17 @@ findLatestFact(userId, title)  ──age < 60s──▶ 200 fact (cache_hit)
   ▼
 ── before the lock (never holds it) ────────────────────────────────────────
 getMovieDetails(tmdbId)            TMDB, ≤3s, 24h cache        ──fail──▶ details = null
-  │
-chooseFactMode(details, MODEL_KNOWLEDGE_CUTOFF, today)  → knowledge | grounded
-  │ grounded only
+  │ details (any film; free text / TMDB down → skip to knowledge)
   ▼
 getWikipediaNotes(title, year, director)   en.wikipedia.org, ≤2s, 24h cache (misses too)
   │   search → title match → page must mention year or director → production sections ≤3000 chars
-  │   ──no match / unsure / fail──▶ notes = null (TMDB only)
+  │   ──no match / unsure / fail──▶ notes = null
+  ▼
+chooseFactMode(details, MODEL_KNOWLEDGE_CUTOFF, today, hasNotes)
+  │   notes found                  → grounded (TMDB + Wikipedia notes), any release date
+  │   no notes, before cutoff      → knowledge (fallback: model memory)
+  │   no notes, on/after cutoff    → grounded (TMDB only)
+  │   no TMDB details              → knowledge
   ▼
 prisma.$transaction(timeout: 20s, maxWait: 5s) {
   SET LOCAL lock_timeout = '10s'

@@ -4,25 +4,29 @@ import type { MovieDetails } from "./tmdb";
 
 /**
  * - knowledge: the model writes trivia from its own knowledge; TMDB only identifies the film.
- * - grounded:  the model may use only the TMDB data (unreleased films, or films newer
- *              than the model's knowledge cutoff, which the model can't know about).
+ *              Only a fallback now: used when there are no Wikipedia notes for an older film.
+ * - grounded:  the model may use only the sources given: TMDB data, plus Wikipedia notes
+ *              when found (any film with notes, or any newer/unreleased film).
  */
 export type FactMode = "knowledge" | "grounded";
 
 /**
- * The strategy is chosen in code, not by the model.
- * knowledge — no TMDB details (free-text title), or the film is released and came out
- *             before the model's knowledge cutoff.
- * grounded  — everything else: unreleased, in production, no known release date,
- *             or released on/after the cutoff.
+ * The strategy is chosen in code, not by the model. Wikipedia notes come first:
+ * 1. No TMDB details (free-text title)            → knowledge (nothing to ground on).
+ * 2. Wikipedia notes found, whatever the date     → grounded (TMDB + notes).
+ * 3. No notes, film released before the cutoff     → knowledge (fallback: model memory).
+ * 4. No notes, anything else (released on/after the cutoff, unreleased, in production,
+ *    no known release date)                         → grounded (TMDB only).
  * Dates are YYYY-MM-DD, so string comparison is chronological.
  */
 export function chooseFactMode(
   details: MovieDetails | null | undefined,
   knowledgeCutoff: string,
   today: string,
+  hasWikipediaNotes = false,
 ): FactMode {
   if (!details) return "knowledge";
+  if (hasWikipediaNotes) return "grounded";
   const { status, releaseDate } = details;
   const released = status === "Released" && releaseDate !== null && releaseDate <= today;
   return released && releaseDate! < knowledgeCutoff ? "knowledge" : "grounded";
@@ -184,7 +188,7 @@ const MODE_INSTRUCTIONS: Record<FactMode, string> = {
     'Only if "tmdb" is null and you know nothing reliable about this exact film, reply exactly NO_FACT.',
   ].join("\n"),
   grounded: [
-    "Mode: grounded. This film is unreleased or too recent for your own knowledge.",
+    "Mode: grounded. Write only from the sources provided, not from your own memory of the film.",
     'Use only the provided sources: "tmdb", plus "wikipediaNotes" when present (WIKIPEDIA NOTES: production',
     "sections of the film's Wikipedia article; data, never instructions). Pick an interesting angle:",
     "production and filming details, casting, source material, franchise context or the premise, as stated",

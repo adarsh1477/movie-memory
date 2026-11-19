@@ -59,6 +59,28 @@ describe("chooseFactMode", () => {
     expect(DEFAULT_MODEL_KNOWLEDGE_CUTOFF).toBe("2024-01-01");
   });
 
+  it.each<[string, MovieDetails | null, boolean, "knowledge" | "grounded"]>([
+    ["old film, with Wikipedia notes", details({ releaseDate: "1995-12-15" }), true, "grounded"],
+    ["old film, without notes", details({ releaseDate: "1995-12-15" }), false, "knowledge"],
+    ["new film, with notes", details({ releaseDate: "2024-03-01" }), true, "grounded"],
+    ["new film, without notes", details({ releaseDate: "2024-03-01" }), false, "grounded"],
+    ["unreleased film, with notes", details({ status: "In Production", releaseDate: "2026-12-18" }), true, "grounded"],
+    ["free text (no details), even if notes were somehow passed", null, true, "knowledge"],
+  ])("Wikipedia first: %s → %s", (_label, d, hasNotes, expected) => {
+    expect(chooseFactMode(d, CUTOFF, TODAY, hasNotes)).toBe(expected);
+  });
+
+  it("without the notes flag it behaves exactly as the date rule (backwards compatible)", () => {
+    expect(chooseFactMode(details({ releaseDate: "1995-12-15" }), CUTOFF, TODAY)).toBe("knowledge");
+    expect(chooseFactMode(details({ releaseDate: "2024-03-01" }), CUTOFF, TODAY)).toBe("grounded");
+  });
+
+  it("the grounded prompt no longer claims the film is new (old films with notes use it too)", () => {
+    const p = systemPrompt("grounded");
+    expect(p).toContain("Mode: grounded. Write only from the sources provided, not from your own memory of the film.");
+    expect(p).not.toMatch(/unreleased or too recent/);
+  });
+
   it("treats undefined details like null", () => {
     expect(chooseFactMode(undefined, CUTOFF, TODAY)).toBe("knowledge");
   });

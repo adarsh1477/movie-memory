@@ -7,6 +7,7 @@ import { FACT_ANGLES } from "@/lib/fact-prompt";
 import { createRateLimiter } from "@/lib/rate-limit";
 import { AppErrorException, OpenAiError } from "@/lib/errors";
 import type { MovieDetails } from "@/lib/tmdb";
+import { logger } from "@/lib/logger";
 
 // ── In-memory stand-in for the Prisma calls the service makes ─────────────────
 
@@ -292,9 +293,9 @@ describe("TMDB context", () => {
     expect(openai.mock.calls[0][0].details).toEqual(HEAT_DETAILS);
   });
 
-  it("fetches details before taking the advisory lock", async () => {
+  it("fetches details (and then Wikipedia notes) before taking the advisory lock", async () => {
     await getFactForUser("userA", deps);
-    expect(db.events).toEqual(["tmdb", "lock", "openai"]);
+    expect(db.events).toEqual(["tmdb", "wikipedia", "lock", "openai"]);
   });
 
   it("skips the TMDB call for a free-text movie", async () => {
@@ -352,10 +353,82 @@ describe("Wikipedia notes", () => {
     expect(db.events).toEqual(["tmdb", "wikipedia", "lock", "openai"]);
   });
 
-  it("knowledge mode: no Wikipedia lookup at all", async () => {
-    await getFactForUser("userA", deps); // Heat, 1995 → knowledge
-    expect(wikipedia).not.toHaveBeenCalled();
+  it("older films are looked up too (Wikipedia first for every film with TMDB details)", async () => {
+    await getFactForUser("userA", deps); // Heat, 1995
+    expect(wikipedia).toHaveBeenCalledWith({ title: "Heat", year: 1995, director: "Michael Mann" });
+  });
+
+  // ── The mode matrix: Wikipedia first, then the date rule ──────────────────
+
+  const OLD_NOTES = "Production: Filming took place on 95 locations in Los Angeles.";
+  const NEW_NOTES = "Production: Filming took place in Budapest and in the Wadi Rum desert of Jordan.";
+
+  it("old film WITH notes → grounded with the notes", async () => {
+    wikipedia.mockResolvedValueOnce({ ok: true, notes: { pageTitle: "Heat (1995 film)", text: OLD_NOTES } });
+    await getFactForUser("userA", deps); // Heat, 1995, before the cutoff
+    expect(openai.mock.calls[0][0]).toMatchObject({ mode: "grounded", details: HEAT_DETAILS, wikipedia: OLD_NOTES });
+  });
+
+  it("old film WITHOUT notes → knowledge (fallback), as before", async () => {
+    wikipedia.mockResolvedValueOnce({ ok: true, notes: null });
+    await getFactForUser("userA", deps);
     expect(openai.mock.calls[0][0]).toMatchObject({ mode: "knowledge", wikipedia: null });
+  });
+
+  it("new film WITH notes → grounded with the notes", async () => {
+    movieDetails.mockResolvedValueOnce(DUNE);
+    wikipedia.mockResolvedValueOnce({ ok: true, notes: { pageTitle: "Dune: Part Two", text: NEW_NOTES } });
+    await getFactForUser("userA", deps);
+    expect(openai.mock.calls[0][0]).toMatchObject({ mode: "grounded", details: DUNE, wikipedia: NEW_NOTES });
+  });
+
+  it("new film WITHOUT notes → grounded on TMDB only, as before", async () => {
+    movieDetails.mockResolvedValueOnce(DUNE);
+    wikipedia.mockResolvedValueOnce({ ok: true, notes: null });
+    await getFactForUser("userA", deps);
+    expect(openai.mock.calls[0][0]).toMatchObject({ mode: "grounded", details: DUNE, wikipedia: null });
+  });
+
+  it("free-text title (no TMDB details) → knowledge, with no Wikipedia lookup", async () => {
+    await getFactForUser("userB", deps);
+    expect(wikipedia).not.toHaveBeenCalled();
+    expect(openai.mock.calls[0][0]).toMatchObject({ mode: "knowledge", details: null, wikipedia: null });
+  });
+
+  it("TMDB down (no details) → knowledge, with no Wikipedia lookup", async () => {
+    movieDetails.mockResolvedValueOnce(null);
+    await getFactForUser("userA", deps);
+    expect(wikipedia).not.toHaveBeenCalled();
+    expect(openai.mock.calls[0][0]).toMatchObject({ mode: "knowledge" });
+  });
+
+  it.each([
+    ["a transient failure (e.g. the 2s timeout)", () => Promise.resolve({ ok: false, notes: null })],
+    ["an exception", () => Promise.reject(new Error("boom"))],
+  ])("an old film whose lookup hits %s still gets a fact, via knowledge mode", async (_label, impl) => {
+    wikipedia.mockImplementationOnce(impl);
+    const result = await getFactForUser("userA", deps);
+    expect(result.stale).toBe(false);
+    expect(openai.mock.calls[0][0]).toMatchObject({ mode: "knowledge", wikipedia: null });
+  });
+
+  it("logs the mode and whether Wikipedia notes were used — and no fact text or personal data", async () => {
+    const info = vi.fn();
+    const child = vi.spyOn(logger, "child").mockReturnValue({ info, warn: vi.fn() } as never); // a minimal stand-in for pino's child logger
+    try {
+      wikipedia.mockResolvedValueOnce({ ok: true, notes: { pageTitle: "Heat (1995 film)", text: OLD_NOTES } });
+      await getFactForUser("userA", deps);
+
+      const call = info.mock.calls.map((c) => c[0]).find((e) => e.event === "fact.openai_call");
+      expect(call).toMatchObject({ mode: "grounded", usedMode: "knowledge", wikipediaNotes: true });
+      expect(JSON.stringify(call)).not.toContain(OLD_NOTES);
+      expect(JSON.stringify(call)).not.toMatch(/fact #|@/);
+
+      const wiki = info.mock.calls.map((c) => c[0]).find((e) => e.event === "fact.wikipedia_context");
+      expect(wiki).toEqual({ event: "fact.wikipedia_context", ok: true, found: true, durationMs: expect.any(Number) });
+    } finally {
+      child.mockRestore();
+    }
   });
 
   it("free-text title (no TMDB details): no Wikipedia lookup", async () => {
