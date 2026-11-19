@@ -287,6 +287,149 @@ describe("FactHistory stays at 5 until Load more", () => {
   });
 });
 
+describe("FactHistory Show less", () => {
+  /** f<n> is n minutes old: a higher number is older. */
+  const latest = (newest: number, count = 5) => Array.from({ length: count }, (_, i) => item(`f${newest + i}`, newest + i));
+  const ids = () => listItems().map((li) => li.querySelector("p")?.textContent?.replace(/^Fact (f\d+)\.$/, "$1"));
+  const button = (name: string) => screen.queryByRole("button", { name });
+
+  async function expand() {
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await flush();
+  }
+
+  it("is hidden until Load more has been clicked", async () => {
+    replies(page(latest(0), "f4"));
+    render(<FactHistory latestFactAt={iso(T0)} />);
+    await flush();
+    expect(button("Load more")).toBeTruthy();
+    expect(button("Show less")).toBeNull();
+  });
+
+  it("collapses to exactly the latest 5 with no request, then Load more continues right after the 5th", async () => {
+    replies(page(latest(0), "f4"), page(latest(5), "f9"), page(latest(5), "f9"));
+    render(<FactHistory latestFactAt={iso(T0)} />);
+    await flush();
+    await expand();
+    expect(listItems()).toHaveLength(10);
+    expect(button("Show less")).toBeTruthy();
+    const requestsBefore = fetchMock.mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    await flush();
+
+    expect(ids()).toEqual(["f0", "f1", "f2", "f3", "f4"]);
+    expect(fetchMock.mock.calls.length).toBe(requestsBefore); // collapsing makes no request
+    expect(button("Show less")).toBeNull();
+    expect(screen.getByText("Showing the latest 5 facts.")).toBeTruthy();
+
+    await expand(); // Load more works again, from right after the 5th item
+    expect(urls().at(-1)).toBe("/api/facts/history?limit=5&cursor=f4");
+    expect(ids()).toEqual(["f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9"]);
+    expect(new Set(ids()).size).toBe(10); // no duplicates
+  });
+
+  it("after collapsing, new facts replace the list again instead of growing it", async () => {
+    replies(page(latest(2), "f6"), page(latest(7), "f11"), page(latest(1), "f5"), page(latest(0), "f4"));
+    const { rerender } = render(<FactHistory latestFactAt={iso(T0 - 2 * 60_000)} />);
+    await flush();
+    await expand();
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    await flush();
+
+    rerender(<FactHistory latestFactAt={iso(T0 - 60_000)} />);
+    await flush();
+    rerender(<FactHistory latestFactAt={iso(T0)} />);
+    await flush();
+
+    expect(ids()).toEqual(["f0", "f1", "f2", "f3", "f4"]);
+    expect(listItems()).toHaveLength(5);
+    expect(fetchMock).toHaveBeenCalledTimes(4); // first page, Load more, then exactly 1 per new fact
+  });
+
+  it("when nothing older is left, shows only Show less — and Load more comes back after collapsing", async () => {
+    replies(page(latest(0), "f4"), page(latest(5, 3), null));
+    render(<FactHistory latestFactAt={iso(T0)} />);
+    await flush();
+    await expand();
+
+    expect(listItems()).toHaveLength(8);
+    expect(button("Load more")).toBeNull();
+    expect(button("Show less")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    await flush();
+
+    expect(listItems()).toHaveLength(5);
+    expect(button("Load more")).toBeTruthy(); // f5..f7 are older again
+    expect(button("Show less")).toBeNull();
+  });
+
+  it("Show less while Load more is in flight cancels it; the late page is ignored", async () => {
+    const more = pending();
+    replies(page(latest(0), "f4"), page(latest(5), "f9"), more.promise);
+    render(<FactHistory latestFactAt={iso(T0)} />);
+    await flush();
+    await expand(); // 10 items, expanded
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more" })); // third request, still pending
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    more.resolve(page(latest(10), "f14"));
+    await flush();
+
+    expect(ids()).toEqual(["f0", "f1", "f2", "f3", "f4"]);
+    expect(button("Load more")?.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("moves focus to Load more and scrolls the section back into view if it was above the viewport", async () => {
+    replies(page(latest(0), "f4"), page(latest(5), "f9"));
+    render(<FactHistory latestFactAt={iso(T0)} />);
+    await flush();
+    await expand();
+
+    const section = screen.getByRole("region", { name: "Fact history" });
+    const scrollIntoView = vi.fn();
+    section.scrollIntoView = scrollIntoView;
+    section.getBoundingClientRect = () => ({ top: -400 }) as DOMRect; // user had scrolled down past it
+
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    await flush();
+
+    expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block: "start" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Load more" }));
+  });
+
+  it("doesn't scroll when the section is already in view", async () => {
+    replies(page(latest(0), "f4"), page(latest(5), "f9"));
+    render(<FactHistory latestFactAt={iso(T0)} />);
+    await flush();
+    await expand();
+
+    const section = screen.getByRole("region", { name: "Fact history" });
+    const scrollIntoView = vi.fn();
+    section.scrollIntoView = scrollIntoView;
+    section.getBoundingClientRect = () => ({ top: 120 }) as DOMRect;
+
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    await flush();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("both controls are real, focusable buttons", async () => {
+    replies(page(latest(0), "f4"), page(latest(5), "f9"));
+    render(<FactHistory latestFactAt={iso(T0)} />);
+    await flush();
+    await expand();
+
+    for (const name of ["Load more", "Show less"]) {
+      const b = screen.getByRole("button", { name });
+      expect(b.tagName).toBe("BUTTON");
+      expect(b.getAttribute("type")).toBe("button");
+      expect(b.className).toContain("focus-visible:outline");
+    }
+  });
+});
+
 describe("FactHistory refresh on a new fact", () => {
   it("refreshes page 1 once when a new fact is shown, prepending it without duplicates", async () => {
     replies(page([item("f2", 1), item("f1", 2)], null), page([item("f3", 0, "Brand new."), item("f2", 1), item("f1", 2)], null));

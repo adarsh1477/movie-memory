@@ -75,6 +75,20 @@ function IconFilm({ className }: { className?: string }) {
   );
 }
 
+function IconChevron({ direction }: { direction: "up" | "down" }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className="h-3.5 w-3.5">
+      <path
+        d={direction === "down" ? "M4 6l4 4 4-4" : "M4 10l4-4 4 4"}
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function Spinner() {
   return <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" />;
 }
@@ -123,6 +137,10 @@ export default function FactHistory({ latestFactAt, pageSize = HISTORY_PAGE_SIZE
   const stateRef = useRef(state);
   const firstPage = useRef<AbortController | null>(null);
   const morePage = useRef<AbortController | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const loadMoreRef = useRef<HTMLButtonElement>(null);
+  /** Set by "Show less"; the effect below then fixes focus and scroll once, after the render. */
+  const justCollapsed = useRef(false);
   useEffect(() => {
     stateRef.current = state;
   });
@@ -194,6 +212,44 @@ export default function FactHistory({ latestFactAt, pageSize = HISTORY_PAGE_SIZE
     loadFirstPage(false);
   }
 
+  /**
+   * "Show less": back to the latest page, no request. The list on screen already starts
+   * with the latest items, so keep the first `pageSize` and point the cursor at the last
+   * of them — a real row of this user's — so "Load more" continues right after it. Any
+   * in-flight "Load more" is aborted so a late response can't re-expand the list.
+   */
+  function showLess() {
+    morePage.current?.abort();
+    justCollapsed.current = true;
+    setState((prev) => {
+      const items = prev.items.slice(0, pageSize);
+      const hasOlder = prev.items.length > pageSize || prev.nextCursor !== null;
+      return {
+        ...prev,
+        items,
+        nextCursor: hasOlder && items.length > 0 ? items[items.length - 1].id : null,
+        expanded: false,
+        loadingMore: false,
+        moreError: null,
+        announcement: `Showing the latest ${items.length} fact${items.length === 1 ? "" : "s"}.`,
+      };
+    });
+  }
+
+  // After collapsing: the "Show less" button is gone, so move focus to "Load more"; and if
+  // the user had scrolled down into the long list, bring the section back into view rather
+  // than leaving the page to jump to wherever the shorter document now ends.
+  useEffect(() => {
+    if (!justCollapsed.current) return;
+    justCollapsed.current = false;
+    const section = sectionRef.current;
+    if (section && section.getBoundingClientRect().top < 0) {
+      const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      section.scrollIntoView?.({ block: "start", behavior: reduceMotion ? "auto" : "smooth" });
+    }
+    loadMoreRef.current?.focus({ preventScroll: true });
+  });
+
   function loadMore() {
     const { nextCursor, loadingMore } = stateRef.current;
     if (!nextCursor || loadingMore) return;
@@ -226,10 +282,17 @@ export default function FactHistory({ latestFactAt, pageSize = HISTORY_PAGE_SIZE
       });
   }
 
-  const { status, items, nextCursor, error, loadingMore, moreError, announcement } = state;
+  const { status, items, nextCursor, error, loadingMore, moreError, announcement, expanded } = state;
+  // Only after "Load more" and only while there is something to hide.
+  const canShowLess = expanded && items.length > pageSize;
 
   return (
-    <section aria-labelledby="fact-history-heading" aria-busy={status === "loading" || loadingMore} className="mt-2">
+    <section
+      ref={sectionRef}
+      aria-labelledby="fact-history-heading"
+      aria-busy={status === "loading" || loadingMore}
+      className="mt-2 scroll-mt-24"
+    >
       {/* Header */}
       <div className="flex items-center gap-2.5">
         <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-text-muted">
@@ -322,24 +385,37 @@ export default function FactHistory({ latestFactAt, pageSize = HISTORY_PAGE_SIZE
             })}
           </ol>
 
-          {(nextCursor || moreError) && (
+          {(nextCursor || moreError || canShowLess) && (
             <div className="mt-4 flex flex-col items-center gap-2 pl-7">
               {moreError && (
                 <p role="alert" className="text-xs text-text-muted">
                   Couldn&apos;t load more. {moreError.code === "RATE_LIMITED" ? "Too many requests — wait a moment." : "Please try again."}
                 </p>
               )}
-              {nextCursor && (
-                <button
-                  type="button"
-                  onClick={loadMore}
-                  disabled={loadingMore}
-                  className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-text transition-colors duration-150 hover:border-accent/40 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-wait disabled:opacity-60 disabled:hover:border-white/10 disabled:hover:text-text"
-                >
-                  {loadingMore && <Spinner />}
-                  {loadingMore ? "Loading…" : "Load more"}
-                </button>
-              )}
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {nextCursor && (
+                  <button
+                    ref={loadMoreRef}
+                    type="button"
+                    onClick={loadMore}
+                    disabled={loadingMore}
+                    className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-text transition-colors duration-150 hover:border-accent/40 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-wait disabled:opacity-60 disabled:hover:border-white/10 disabled:hover:text-text"
+                  >
+                    {loadingMore ? <Spinner /> : <IconChevron direction="down" />}
+                    {loadingMore ? "Loading…" : "Load more"}
+                  </button>
+                )}
+                {canShowLess && (
+                  <button
+                    type="button"
+                    onClick={showLess}
+                    className="flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium text-text-muted transition-colors duration-150 hover:bg-white/[0.04] hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                  >
+                    <IconChevron direction="up" />
+                    Show less
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </>
