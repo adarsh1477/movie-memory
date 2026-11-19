@@ -75,7 +75,9 @@ describe("lib/env", () => {
       },
     );
 
-    it("is the model lib/openai.ts sends to OpenAI", async () => {
+    // Re-imports the whole OpenAI SDK after vi.resetModules(): ~0.5s alone, but well over
+    // the default 5s under a full parallel run or a slow CI runner.
+    it("is the model lib/openai.ts sends to OpenAI", { timeout: 15_000 }, async () => {
       await loadEnv({ OPENAI_MODEL: "gpt-4o-mini" });
       const { generateFact, OPENAI_MODEL } = await import("@/lib/openai");
       const create = vi.fn().mockResolvedValue({

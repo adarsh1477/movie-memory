@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, lint and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: movie
+          POSTGRES_PASSWORD: movie
+          POSTGRES_DB: movie_memory
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U movie -d movie_memory"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Dummy values only — no real secrets. Tests mock OpenAI and TMDB, and
+    # vitest.setup.ts blocks any real request to api.openai.com / api.themoviedb.org.
+    # TMDB_API_KEY is deliberately unset (TMDB tests set their own fake key).
+    env:
+      DATABASE_URL: postgresql://movie:movie@localhost:5432/movie_memory
+      # The real-Postgres suites (fact-lock, fact-authz, fact-route-authz) default to the
+      # local Docker port 5433; point them at the service container instead.
+      PG_TEST_URL: postgresql://movie:movie@localhost:5432/movie_memory?connection_limit=20
+      AUTH_SECRET: ci-dummy-auth-secret-not-real-0123456789
+      GOOGLE_CLIENT_ID: ci-dummy-google-client-id
+      GOOGLE_CLIENT_SECRET: ci-dummy-google-client-secret
+      OPENAI_API_KEY: sk-ci-dummy-not-a-real-key
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        # Version comes from "packageManager" in package.json.
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm prisma generate
+
+      - name: Apply migrations to the service database
+        run: pnpm prisma migrate deploy
+
+      - name: Typecheck
+        run: pnpm tsc --noEmit
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test

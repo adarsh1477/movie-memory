@@ -1,12 +1,12 @@
 # Test Plan
 
-Vitest + React Testing Library. 19 suites (381 tests). Three suites run against the real Docker Postgres; everything else mocks Prisma, `auth()`, OpenAI, TMDB or `fetch`.
+Vitest + React Testing Library. 23 suites (417 tests). Three suites run against the real Docker Postgres; everything else mocks Prisma, `auth()`, OpenAI, TMDB or `fetch`.
 
 Run: `pnpm test` (about 21s, mostly the 7s and 11s lock tests). Skip the Postgres suites with `SKIP_PG_TESTS=1`; point them elsewhere with `PG_TEST_URL`. They only touch users they create and delete them afterwards.
 
 ## `vitest.setup.ts`
 
-Sets dummy values for every required env var **before any test file is imported**, so `lib/env.ts` (which throws at module import if any var is missing) doesn't fail every suite. It also clears `OPENAI_MODEL` so every suite sees the default model. `env.test.ts` is the one place that deliberately resets modules and re-imports with vars changed or removed, to prove the startup check works.
+Sets dummy values for every required env var **before any test file is imported**, so `lib/env.ts` (which throws at module import if any var is missing) doesn't fail every suite. It also clears `OPENAI_MODEL` so every suite sees the default model, and installs a **network guard**: a wrapped global `fetch` that rejects any request to `api.openai.com` or `api.themoviedb.org`. A test that forgets to mock OpenAI or TMDB fails instead of calling the real service. Tests that stub `fetch` replace the guard for their duration; `vi.unstubAllGlobals()` restores it. `env.test.ts` is the one place that deliberately resets modules and re-imports with vars changed or removed, to prove the startup check works.
 
 ## Test matrix
 
@@ -49,6 +49,10 @@ Sets dummy values for every required env var **before any test file is imported*
 | 22 | `movie-search-combobox.test.tsx` | 300ms debounce, stale request aborted, arrows/Enter/Escape, empty and degraded states | Movie search UI; a11y |
 | 23 | `onboarding-form.test.tsx` | Continue disabled until text; selected-movie preview; Change clears the selection | Onboarding UI |
 | 24 | `env.test.ts` | `resetModules()` + `delete process.env.OPENAI_API_KEY` + re-import of `lib/env.ts` → throws a named error; `OPENAI_MODEL` defaults to `gpt-4.1-mini` (unset or blank), is trimmed, accepts dated/fine-tuned ids, rejects malformed values at startup, and is the `model` `generateFact` sends; `MODEL_KNOWLEDGE_CUTOFF` defaults to `2024-06-01`, trims, rejects non-dates and impossible dates | Security §3 (startup validation); config |
+| 26 | `auth-routing.test.ts` | Auth flow: `/` renders the landing page when signed out, sends a first-time user to `/onboarding` and a returning user to `/dashboard`; `/onboarding` → `/` when signed out, → `/dashboard` if a movie exists, → `/` if the user row is gone; `/dashboard` → `/` when signed out, → `/onboarding` without a movie; every lookup uses the session's user id; `proxy.ts` matcher, redirect without a session cookie, pass-through with either Auth.js cookie name, unrelated cookies ignored | Base §1 Auth; §3 "redirect to login" |
+| 27 | `avatar.test.tsx` | Google photo shown; initials when there is no photo; initials when the photo fails to load; single-word name; email prefix when there is no name; "?" when the prefix has no letters; nav shows the email prefix when the name is missing, plus the email and Sign out | Security §4 "missing Google photo or name" |
+| 28 | `onboarding-action.test.ts` | `saveMovie` server action: no session → `/` and nothing saved; selection saved for the session user, then → `/dashboard`; a form `userId` is ignored; empty / too-long title → the validation message (server-side); forged selection → friendly message; the service's "pick from the suggestions" message passed through; unexpected errors hidden behind a friendly message | Base §2 Onboarding; Security §1 |
+| 29 | `network-guard.test.ts` | Direct fetches to OpenAI and TMDB are blocked; the real OpenAI client (no mock injected) is blocked and surfaces as `OpenAiError`; the real TMDB search is blocked and reports `degraded` | CI never calls external services |
 | 25 | `movie-edit.test.tsx` | Pencil opens a focused, prefilled search; picking a result shows the new title, year and poster before the PUT resolves (no fact request until confirmed); failure reverts with the server message; Cancel and Escape (after closing the list) exit without saving; arrows + Enter save; free text sent without TMDB fields and the server's rule shown; focus returns to the pencil; old cache entry dropped; 401 → redirect; dropdown stacking (title area `relative z-20` before a `relative z-0` FactCard area, popup inside the title area, no clipping ancestor, opaque bordered scrolling popup), clicking a result while the FactCard is still loading | Variant B §2 "Edit Movie Flow (Inline)" |
 
 ## How each suite is structured
@@ -58,6 +62,17 @@ Sets dummy values for every required env var **before any test file is imported*
 - **Route handlers** — called directly with `Request` / `NextRequest`; `@/lib/auth` mocked per test.
 - **Browser client** — `vi.stubGlobal('fetch', …)` returning real `Response` objects.
 - **Components** — RTL `render` + `fireEvent`; `next/image` and `next/navigation` mocked; fake timers (`setTimeout`, `setInterval`, `Date`) for the debounce, the countdown and the auto-swap; `document.visibilityState` stubbed to test pausing. `fetch` returns plain response objects, routed by URL in `movie-edit.test.tsx`. The shared `factCache` and rate limiters are reset in `beforeEach`.
+
+## CI (`.github/workflows/ci.yml`)
+
+Runs on every push and pull request, on `ubuntu-latest` with a 15-minute timeout:
+
+1. Postgres 16 service container (`movie` / `movie` / `movie_memory`, port 5432), health-checked with `pg_isready`.
+2. pnpm (version from `packageManager`) + Node 22 with pnpm caching; `pnpm install --frozen-lockfile`.
+3. `prisma generate`, then `prisma migrate deploy` against the service database (the same path as a fresh deploy).
+4. `tsc --noEmit`, `eslint .`, `vitest run`. The three real-Postgres suites run against the service container via `PG_TEST_URL` (locally they default to the Docker port 5433).
+
+Environment: dummy values only (`DATABASE_URL`, `PG_TEST_URL`, `AUTH_SECRET`, `GOOGLE_CLIENT_ID/SECRET`, `OPENAI_API_KEY`); `TMDB_API_KEY` unset; no `secrets.*`. OpenAI and TMDB are mocked in every test and blocked by the network guard, so CI never calls them. Concurrent runs on the same branch are cancelled; the token is read-only.
 
 ## What is NOT tested (and why)
 

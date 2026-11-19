@@ -26,11 +26,11 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 ## Requirements checklist (spec → implementation)
 
 **Base**
-- [ ] `/` landing with "Sign in with Google" when unauth; redirects elsewhere when auth
-- [ ] First-time Google users → `/onboarding`; returning users → `/dashboard`
-- [ ] Onboarding: server-trimmed, length-validated favorite movie, stored per-user
-- [ ] Dashboard shows name, email, photo (with initials fallback), favorite movie, logout
-- [ ] `/dashboard` unauthenticated → redirect to `/`
+- [x] `/` landing with "Sign in with Google" when unauth; redirects elsewhere when auth
+- [x] First-time Google users → `/onboarding`; returning users → `/dashboard`
+- [x] Onboarding: server-trimmed, length-validated favorite movie, stored per-user
+- [x] Dashboard shows name, email, photo (with initials fallback), favorite movie, logout
+- [x] `/dashboard` unauthenticated → redirect to `/`
 - [x] Fact card calls OpenAI, stores each generated fact
 - [x] Movie search autocomplete at onboarding: `GET /api/movies/search?q=` (auth, Zod 2–100 chars, TMDB server-side, ≤6 results, `{ degraded: true }` on failure, per-user rate limit, `no-store`); accessible combobox reused by the Stage 7 inline edit
 - [x] Movie poster comes from the selected search result: `tmdbId`, `year`, `posterPath` stored on `Movie` at save; shown on dashboard hero card; gradient fallback for free-text titles (TMDB degraded or no match)
@@ -51,13 +51,13 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 **Security (all)**
 - [x] Server-side validation for every mutation
 - [x] Every query scoped by `userId` from the session (never trust client-supplied ids)
-- [ ] Secrets (Google, OpenAI, DB) server-only; no `NEXT_PUBLIC_` leaks (enforced by Zod env schema)
-- [ ] Graceful fallback for missing Google name/photo
+- [x] Secrets (Google, OpenAI, DB, TMDB) server-only: no `NEXT_PUBLIC_` variables exist, and no client component imports `env`, `openai`, `prisma`, the services or server-side `tmdb` (client code uses `tmdb-image` and `lib/api.ts`)
+- [x] Graceful fallback for missing Google name/photo
 - [x] Per-user rate limit (30 req / 60s) on `/api/fact`
-- [ ] Zod env validation on startup
-- [ ] Route-level error boundaries + `global-error.tsx`
-- [ ] Structured logging (`pino`) with PII redaction
-- [ ] GitHub Actions CI: typecheck + lint + unit/component tests + lock test against Postgres service
+- [x] Zod env validation on startup
+- [x] Route-level error boundaries + `global-error.tsx`
+- [x] Structured logging (`pino`) with PII redaction
+- [x] GitHub Actions CI: typecheck + lint + unit/component tests + lock test against Postgres service
 
 ## Build order (stages)
 
@@ -69,7 +69,7 @@ The deliverable is a **plan only**, plus seven short decision-focused docs under
 6. **Variant A upgrade + movie search** — *(Variant A was built together with Stage 5.)* 60s cache check + blocking advisory lock + OpenAI fallback + per-user rate limit in the same service. **Movie search replaces the planned `fetchPosterPath(title)` lookup:** `searchMovies(query)` in `lib/tmdb.ts` (TMDB `/search/movie`, Bearer token, 3s timeout, never throws, `{ results, degraded }`), `GET /api/movies/search`, `components/MovieSearchCombobox.tsx` in onboarding. The user picks the exact film, so `tmdbId`, `year` and `posterPath` are saved with the title in one write — no guess-the-first-result lookup. Free text is accepted only when TMDB is degraded or has no match (re-checked server-side in the action). The year is passed to the OpenAI prompt.
 7. **Typed API layer (Variant B)** — *(Done.)* `GET /api/me`, `PUT /api/me/movie`, `GET /api/fact` (no query params, so no `?force`) with shared Zod contracts in `lib/validation.ts`. Every route uses `requireUserId()` (`auth()` at the boundary) and `handle()` from `lib/http.ts`: the `{ ok, data | error }` envelope, `Cache-Control: no-store`, `Retry-After` on 429, and unexpected errors logged and returned as a generic 500 `INTERNAL`. Saving goes through `lib/movie-service.ts`, shared with the onboarding action. `lib/api.ts` is the typed browser client: every failure becomes `AppErrorException` with a stable `code`; aborts pass through. The dashboard `FactCard` loads the real fact via `useFact()` (skeleton, error + Try again, stale hint, rate-limit wait, redirect on 401).
 8. **Inline edit + client cache (Variant B)** — *(Done.)* `MovieHeroCard` is now the client-side dashboard hero (backdrop, poster, title, FactCard). The pencil opens `MovieSearchCombobox` (no `name`, via `onSelectionChange`); picking a result calls `putMovie` with an optimistic title / year / poster that reverts with the server's message on failure; free text goes through the same server rule as onboarding; Cancel or Escape exits; focus returns to the pencil. The FactCard follows only the server-confirmed movie (it shows a saving skeleton meanwhile). `lib/client-cache.ts`: 30s in-memory cache keyed by `userId:movieTitle`, cleared on sign-out and per movie on edit. `useFact()`: cache hit with no request, "New fact" (skips only the client cache; inside the 60s window the server returns the same fact and the card says when a fresh one is possible), countdown to `generatedAt + 60s` corrected by `serverNow`, auto-load at 0:00 only while the tab is visible (resync on return), 30s retry with the stale hint on failure, a 5s backoff if the same fact comes back. `PUT /api/me/movie` rate limited to 20/min per user (own counter).
-9. **Tests + CI** — Vitest suites + `.github/workflows/ci.yml` (typecheck + lint + tests + Postgres service for lock test)
+9. **Tests + CI** — *(Done.)* Every planned suite exists (23 suites, 417 tests), plus `auth-routing` (landing / onboarding / dashboard redirects and `proxy.ts`), `avatar` (missing Google photo / name), `onboarding-action` (the server action) and `network-guard`. `vitest.setup.ts` blocks any real request to `api.openai.com` / `api.themoviedb.org`. `.github/workflows/ci.yml`: on push and pull request; Postgres 16 service with a health check; `pnpm install --frozen-lockfile` with pnpm caching; `prisma generate` + `prisma migrate deploy` against the service DB; `tsc --noEmit`, `eslint`, `vitest run` (including the three real-Postgres suites via `PG_TEST_URL`); dummy env values only, no secrets.
 10. **Polish + README** — states, focus rings, docs, screenshots, AI-usage note; premium landing page: animated TMDB trending poster wall (`PosterBackground` — 3 marquee rows, `clamp(120px, 11vw, 210px)` poster height, 4-layer overlay, `getTrendingPosters()` with 24 h revalidate), multi-section layout with `ScrollFade` scroll animations, `FactCarousel` (swipe/keyboard/arrow nav), `MockCardPreview`; "Data from TMDB" footer credit on the landing page (conditional on poster data)
 
 ## Key design decisions
