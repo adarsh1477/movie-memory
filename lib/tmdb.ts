@@ -235,45 +235,143 @@ function toSearchResult(item: unknown): MovieSearchResult | null {
   return result.success ? result.data : null;
 }
 
-const TrendingResponse = z.object({
-  results: z.array(z.object({ poster_path: z.string().nullable() })),
+// ── Poster pool (landing + onboarding wall) ─────────────────────────────────
+//
+// The pages call auth(), so they render per request; the TMDB data behind the wall is
+// cached here instead, in memory, shared by every visitor of this server process.
+
+/** TMDB lists the wall draws from: about 80 posters before de-duplication. */
+export const POSTER_LISTS = ["trending/movie/day", "movie/popular", "movie/top_rated", "movie/now_playing"] as const;
+export type PosterList = (typeof POSTER_LISTS)[number];
+
+export const POSTER_POOL_TTL_MS = 60 * 60 * 1000; // a full pool is reused for 1 hour
+export const POSTER_POOL_PARTIAL_TTL_MS = 5 * 60 * 1000; // some lists failed: try again sooner
+export const POSTER_POOL_RETRY_MS = 60 * 1000; // every list failed: don't retry for 1 minute
+export const POSTER_POOL_MAX = 80;
+
+const PosterListResponse = z.object({
+  results: z.array(z.object({ poster_path: z.string().nullable().optional() })),
 });
 
-export async function getTrendingPosters(): Promise<string[]> {
+/**
+ * One TMDB list's poster paths. `null` means the list FAILED (no key, HTTP error, timeout,
+ * odd body); `[]` means it succeeded with nothing usable. Posters without an image, or with
+ * a path that isn't a plain TMDB image path, are skipped.
+ */
+export async function fetchPosterList(list: PosterList): Promise<string[] | null> {
   const key = process.env.TMDB_API_KEY;
-  if (!key) {
-    console.warn("[tmdb] TMDB_API_KEY not set — skipping poster fetch");
-    return [];
-  }
+  if (!key) return null;
 
   try {
-    const res = await fetch(
-      "https://api.themoviedb.org/3/trending/movie/day?language=en-US",
-      {
-        headers: { Authorization: `Bearer ${key}` },
-        signal: AbortSignal.timeout(3000),
-        next: { revalidate: 86400 },
-      },
-    );
-
+    const res = await fetch(`${TMDB_API_BASE}/${list}?language=en-US&page=1`, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(TMDB_TIMEOUT_MS),
+      cache: "no-store", // cached by the pool loader below, not by Next's fetch cache
+    });
     if (!res.ok) {
-      console.warn(`[tmdb] Trending fetch failed: HTTP ${res.status}`);
-      return [];
+      console.warn(`[tmdb] Poster list ${list} failed: HTTP ${res.status}`);
+      return null;
     }
-
-    const json = await res.json();
-    const parsed = TrendingResponse.safeParse(json);
-
+    const parsed = PosterListResponse.safeParse(await res.json());
     if (!parsed.success) {
-      console.warn("[tmdb] Unexpected response shape:", parsed.error.message);
-      return [];
+      console.warn(`[tmdb] Unexpected response shape for ${list}`);
+      return null;
     }
-
     return parsed.data.results
       .map((r) => r.poster_path)
-      .filter((p): p is string => typeof p === "string" && p.length > 0);
+      .filter((p): p is string => posterPathSchema.safeParse(p).success);
   } catch (err) {
-    console.warn("[tmdb] Error fetching trending posters:", err);
+    console.warn(`[tmdb] Error fetching poster list ${list}:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/**
+ * Merges the lists round-robin (so no single list dominates the start of the pool),
+ * drops duplicates (a film is often both popular and trending), and caps the size.
+ */
+export function mergePosterLists(lists: string[][], max = POSTER_POOL_MAX): string[] {
+  const seen = new Set<string>();
+  const pool: string[] = [];
+  const longest = Math.max(0, ...lists.map((l) => l.length));
+  for (let i = 0; i < longest && pool.length < max; i++) {
+    for (const list of lists) {
+      const p = list[i];
+      if (p === undefined || seen.has(p)) continue;
+      seen.add(p);
+      pool.push(p);
+      if (pool.length >= max) break;
+    }
+  }
+  return pool;
+}
+
+export type PosterPoolLoader = () => Promise<string[]>;
+
+/**
+ * In-memory poster pool, per server process:
+ * - Fresh pool (1 hour, or 5 minutes if some lists failed) → returned with no TMDB call.
+ * - Concurrent callers while refreshing share ONE refresh (one request per list).
+ * - Every list failed → NOT cached as success: the last good pool is served (stale on
+ *   error) if there is one, otherwise [] (the pages' existing no-poster fallback), and
+ *   TMDB isn't retried for a minute.
+ */
+export function createPosterPoolLoader(opts: {
+  lists?: readonly PosterList[];
+  fetchList?: (list: PosterList) => Promise<string[] | null>;
+  now?: () => number;
+  ttlMs?: number;
+  partialTtlMs?: number;
+  retryMs?: number;
+} = {}): PosterPoolLoader {
+  const lists = opts.lists ?? POSTER_LISTS;
+  const fetchList = opts.fetchList ?? fetchPosterList;
+  const now = opts.now ?? Date.now;
+  const ttlMs = opts.ttlMs ?? POSTER_POOL_TTL_MS;
+  const partialTtlMs = opts.partialTtlMs ?? POSTER_POOL_PARTIAL_TTL_MS;
+  const retryMs = opts.retryMs ?? POSTER_POOL_RETRY_MS;
+
+  let good: { posters: string[]; expiresAt: number } | null = null;
+  let retryAfter = 0;
+  let inFlight: Promise<string[]> | null = null;
+
+  async function refresh(): Promise<string[]> {
+    const results = await Promise.all(lists.map((l) => fetchList(l).catch(() => null)));
+    const succeeded = results.filter((r): r is string[] => r !== null);
+    const pool = mergePosterLists(succeeded);
+
+    if (pool.length === 0) {
+      // Total failure (or nothing usable): never cached as success.
+      retryAfter = now() + retryMs;
+      console.warn(`[tmdb] Poster pool refresh failed; serving ${good ? "the last good pool" : "no posters"}`);
+      return good?.posters ?? [];
+    }
+
+    const partial = succeeded.length < lists.length;
+    // A partial refresh doesn't replace a bigger pool we already have; either way, retry soon.
+    const posters = partial && good && good.posters.length > pool.length ? good.posters : pool;
+    good = { posters, expiresAt: now() + (partial ? partialTtlMs : ttlMs) };
+    return posters;
+  }
+
+  return async function loadPosterPool() {
+    const t = now();
+    if (good && t < good.expiresAt) return good.posters;
+    if (t < retryAfter) return good?.posters ?? [];
+    inFlight ??= refresh().finally(() => {
+      inFlight = null;
+    });
+    return inFlight;
+  };
+}
+
+const defaultPosterPool = createPosterPoolLoader();
+
+/** The shared poster pool for the landing and onboarding walls. [] when TMDB isn't configured. */
+export async function getPosterPool(): Promise<string[]> {
+  if (!process.env.TMDB_API_KEY) {
+    console.warn("[tmdb] TMDB_API_KEY not set; skipping poster fetch");
     return [];
   }
+  return defaultPosterPool();
 }

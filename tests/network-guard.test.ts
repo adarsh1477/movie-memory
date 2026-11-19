@@ -1,6 +1,6 @@
 // @vitest-environment node
 // The guard in vitest.setup.ts: tests can never call OpenAI or TMDB for real.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { generateFact } from "@/lib/openai";
 import { searchMovies } from "@/lib/tmdb";
 import { OpenAiError } from "@/lib/errors";
@@ -40,6 +40,19 @@ describe("test network guard", () => {
       ok: false,
       notes: null,
     });
+  });
+
+  it("blocks the real TMDB poster lists (each reports a failure, so the wall falls back)", async () => {
+    process.env.TMDB_API_KEY = "dummy";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { fetchPosterList, createPosterPoolLoader } = await import("@/lib/tmdb");
+      await expect(fetchPosterList("trending/movie/day")).resolves.toBeNull();
+      await expect(createPosterPoolLoader()()).resolves.toEqual([]);
+    } finally {
+      warn.mockRestore();
+      delete process.env.TMDB_API_KEY;
+    }
   });
 
   it("blocks the real TMDB search (which then reports degraded, as it would on any failure)", async () => {

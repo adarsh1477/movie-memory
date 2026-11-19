@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { getTrendingPosters } from "@/lib/tmdb";
+import { getPosterWall } from "@/lib/poster-wall";
 import DashboardNav from "@/components/DashboardNav";
 import OnboardingForm from "@/components/OnboardingForm";
 import PosterBackground from "@/components/PosterBackground";
@@ -17,7 +17,7 @@ export default async function OnboardingPage() {
   if (!user) redirect("/");
   if (user.movie) redirect("/dashboard");
 
-  const posters = await getTrendingPosters();
+  const posters = await getPosterWall();
   const hasPosterWall = posters.length >= 4; // PosterBackground renders nothing below 4
   const firstName = user.name?.trim().split(/\s+/)[0];
 

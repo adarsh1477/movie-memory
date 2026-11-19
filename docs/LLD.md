@@ -35,7 +35,7 @@ lib/
   prisma.ts                      PrismaClient singleton (globalThis in dev)
   openai.ts                      generateFact(movie, avoid[], signal) + refusal guard; looksLikeRefusal()
   fact-prompt.ts                 Pure: chooseFactMode, pickAngle, system prompts per mode, user message
-  tmdb.ts                        Server-only. getTrendingPosters(): landing wall, 24 h revalidate, [] on failure; searchMovies(q): ≤6 results, 3s timeout, { results, degraded }, never throws; getMovieDetails(tmdbId): fact grounding, 3s timeout, 24 h in-memory cache, null on failure
+  tmdb.ts                        Server-only. getPosterPool(): landing/onboarding wall pool from 4 lists, 1 h in-memory cache, shared refresh, stale on error, [] fallback; searchMovies(q): ≤6 results, 3s timeout, { results, degraded }, never throws; getMovieDetails(tmdbId): fact grounding, 3s timeout, 24 h in-memory cache, null on failure
   tmdb-image.ts                  Client-safe posterUrl(path, size)
   me.ts                          loadMe(userId) → MeResponse
   movie-service.ts               saveMovieForUser(userId, input) — shared by onboarding + PUT
@@ -69,7 +69,8 @@ tests/
   api-client.test.ts
   movie-edit.test.tsx            Inline edit: optimistic, revert, cancel, keyboard, free text
   client-cache.test.ts
-  tmdb.test.ts                   getTrendingPosters: success path, missing 'results' key → [], fetch throws → [], absent TMDB_API_KEY → [] (fetch never called), non-OK HTTP status → []
+  tmdb.test.ts                   fetchPosterList / mergePosterLists / createPosterPoolLoader: parsing, de-dupe, 1 h cache, shared refresh, stale on error, fallback; plus search and details
+  poster-wall.test.ts            seededShuffle (permutation, deterministic per seed) and getPosterWall (40 distinct posters, new order per render)
 proxy.ts                         Cookie-presence redirect only
 vitest.setup.ts                  Dummy env vars for test imports
 eslint.config.js                 ESLint 9 flat config
@@ -161,9 +162,14 @@ export function posterUrl(
   size?: "w342" | "w500" | "original",   // default "w342"
 ): string
 
-export async function getTrendingPosters(): Promise<string[]>
-// Returns trending poster paths. TMDB_API_KEY absent or any error → [].
-// Uses next: { revalidate: 86400 } and AbortSignal.timeout(3000).
+export async function getPosterPool(): Promise<string[]>
+// Cached pool of up to 80 unique poster paths from 4 TMDB lists. TMDB_API_KEY absent → [].
+// createPosterPoolLoader: 1 h TTL (5 min after a partial refresh), shared in-flight refresh,
+// total failure → last good pool or [], never cached, 1 min retry pause.
+
+// lib/poster-wall.ts
+export function seededShuffle<T>(items: readonly T[], seed: number): T[]
+export async function getPosterWall(seed?: number): Promise<string[]>  // shuffled pool, first 40
 
 export async function searchMovies(
   query: string,
@@ -398,7 +404,7 @@ All authed responses: `Cache-Control: no-store`.
 - `lib/fact-prompt.ts` — pure prompt building: `chooseFactMode` (the knowledge vs grounded decision), `pickAngle` (per-mode angle lists), `systemPrompt` / `strictSystemPrompt` per mode (with the good/bad examples, `KNOWLEDGE_ACCURACY_RULE` and `GROUNDED_SOURCE_RULE`), `buildUserMessage`. No network or env, so it is unit-tested directly.
 - `lib/openai.ts` constants: `FACT_TEMPERATURE = 0.4`, `MAX_TOKENS = 200`, `MAX_FACT_CHARS = 450`, `MIN_FACT_CHARS = 20`, `OPENAI_DEADLINE_MS = 8000`.
 - `lib/openai.ts` — `generateFact(movie, avoid, signal)`: sends `systemPrompt(mode)` + `buildUserMessage(mode, …)` to `env.OPENAI_MODEL`, retries once on 429/5xx, retries once on an unusable reply (grounded fallback or strict prompt), never returns a refusal, and reports which mode produced the fact. Also exports `looksLikeRefusal` and `cleanFact`. No database access.
-- `lib/tmdb.ts` — server-only (Bearer token). `getTrendingPosters()`: TMDB `/trending/movie/day`, `next: { revalidate: 86400 }`, `AbortSignal.timeout(3000)`; `string[]` of poster paths, `[]` on any failure. `searchMovies(q)`: `/search/movie`, same auth/timeout, `cache: "no-store"`, ≤6 Zod-validated results, `{ degraded: true }` on any failure. `getMovieDetails(tmdbId)`: `/movie/{id}?append_to_response=credits,keywords`, same auth/timeout, compact `MovieDetails` (overview, tagline, release date, status, runtime, genres, directors, top 5 cast, studios, up to 10 keywords), 24h in-memory cache per id with shared in-flight requests, `null` on any failure. Re-exports `posterUrl` from `lib/tmdb-image.ts`, which client components import instead.
+- `lib/tmdb.ts` — server-only (Bearer token). `getPosterPool()`: `/trending/movie/day`, `/movie/popular`, `/movie/top_rated` and `/movie/now_playing` in parallel (`cache: "no-store"`, 3s each), merged round-robin and de-duplicated to ≤80 paths, cached in memory for 1 hour with a shared refresh and stale-on-error; `[]` when there is no key or no good pool yet. `searchMovies(q)`: `/search/movie`, same auth/timeout, `cache: "no-store"`, ≤6 Zod-validated results, `{ degraded: true }` on any failure. `getMovieDetails(tmdbId)`: `/movie/{id}?append_to_response=credits,keywords`, same auth/timeout, compact `MovieDetails` (overview, tagline, release date, status, runtime, genres, directors, top 5 cast, studios, up to 10 keywords), 24h in-memory cache per id with shared in-flight requests, `null` on any failure. Re-exports `posterUrl` from `lib/tmdb-image.ts`, which client components import instead.
 - `components/MovieSearchCombobox.tsx` — WAI-ARIA combobox: 300ms debounce, `AbortController` per request, arrows/Enter/Escape, loading/no-results/degraded states. With `name`, renders hidden `tmdbId`/`year`/`posterPath` inputs for a server action; without it, reports via `onSelectionChange` (Stage 7 inline edit).
 - `lib/lock.ts` — `withAdvisoryLock(tx, key, fn)`: sets `lock_timeout`, calls `pg_advisory_xact_lock`, runs `fn`, maps `55P03` → `LockTimeoutError`.
 - `lib/rate-limit.ts` — in-memory sliding window; pure function with injectable `now`.

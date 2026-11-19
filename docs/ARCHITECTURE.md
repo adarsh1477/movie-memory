@@ -17,8 +17,8 @@ app/layout.tsx (RootLayout)
 The `onboarding` segment composes `OnboardingForm` (client — Save button, Zod-mirrored validation hints). Landing (`/`) is a server component that calls `auth()` and, for authenticated users, `redirect()`s before the page paints; for unauthenticated users it renders a full-page premium landing composed of:
 
 ```
-app/page.tsx (server — auth(), getTrendingPosters())
-├── PosterBackground (server — 3 marquee rows, TMDB trending posters, 4-layer overlay)
+app/page.tsx (server — auth(), getPosterWall())
+├── PosterBackground (server — 3 marquee rows, 40 posters from the cached TMDB pool, 4-layer overlay)
 ├── header: Logo + SignInButton (nav variant)
 ├── section 1: Hero — headline + SignInButton (CTA) | MockCardPreview (client)
 ├── section 2: How it works — HowStep × 3, ScrollFade (client)
@@ -37,15 +37,17 @@ app/page.tsx (server — auth(), getTrendingPosters())
 ```
 Browser ──GET /──▶ app/page.tsx
   │                   ├── auth() → has session → redirect(/dashboard or /onboarding)
-  │                   └── getTrendingPosters()
-  │                         ├── TMDB_API_KEY absent → [] immediately (no fetch)
-  │                         └── fetch("https://api.themoviedb.org/3/trending/movie/day", {
-  │                               headers: { Authorization: "Bearer <TMDB_API_KEY>" },
-  │                               next: { revalidate: 86400 },   // 24 h Next.js data cache
-  │                               signal: AbortSignal.timeout(3000)
-  │                             })
-  │                               ├── ok → Zod parse → filter null poster_path → string[]
-  │                               └── any failure (network, non-OK, timeout, bad shape) → []
+  │                   └── getPosterWall()   (lib/poster-wall.ts; the page itself stays per request)
+  │                         ├── getPosterPool()  (lib/tmdb.ts; in-memory, per server process)
+  │                         │     ├── TMDB_API_KEY absent/empty → [] immediately (no fetch)
+  │                         │     ├── pool fresh (1 h; 5 min if some lists failed) → no TMDB call
+  │                         │     ├── refreshing → concurrent callers share the one refresh
+  │                         │     └── refresh: 4 lists in parallel, each ≤3s, cache: no-store
+  │                         │           trending/movie/day, movie/popular, movie/top_rated, movie/now_playing
+  │                         │           → skip no-image/odd paths → merge round-robin, de-dupe, ≤80
+  │                         │           └── every list failed → last good pool (stale on error)
+  │                         │                 or [] if none; not cached; no retry for 1 min
+  │                         └── seededShuffle(pool, random seed per render) → first 40
   │
   └── render PosterBackground (server, no hydration) + 5 landing sections
       posters.length < 4 → PosterBackground renders nothing; page still loads normally

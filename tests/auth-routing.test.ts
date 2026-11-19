@@ -33,7 +33,7 @@ vi.mock("@/lib/prisma", () => ({
 }));
 vi.mock("@/lib/tmdb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/tmdb")>()),
-  getTrendingPosters: async () => [],
+  getPosterPool: async () => [],
 }));
 
 const { default: LandingPage } = await import("@/app/page");

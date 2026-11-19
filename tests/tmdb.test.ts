@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
-  getTrendingPosters,
+  getPosterPool,
+  fetchPosterList,
+  mergePosterLists,
+  createPosterPoolLoader,
+  POSTER_POOL_MAX,
+  POSTER_POOL_TTL_MS,
+  POSTER_POOL_PARTIAL_TTL_MS,
+  POSTER_POOL_RETRY_MS,
+  type PosterList,
   searchMovies,
   fetchMovieDetails,
   createMovieDetailsLoader,
@@ -25,6 +33,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   delete process.env.TMDB_API_KEY;
 });
 
@@ -48,62 +57,201 @@ describe("an empty TMDB_API_KEY is treated as unset", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("trending posters are empty (gradient fallback) with no fetch", async () => {
+  it("the poster pool is empty (gradient fallback) with no fetch", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    await expect(getTrendingPosters()).resolves.toEqual([]);
+    await expect(getPosterPool()).resolves.toEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
-describe("getTrendingPosters", () => {
-  it("returns poster paths from a successful response", async () => {
+describe("fetchPosterList", () => {
+  it("returns poster paths, skipping posters with no image or an odd path", async () => {
     stubFetch({
       results: [
         { poster_path: "/abc123.jpg" },
         { poster_path: "/def456.jpg" },
         { poster_path: null },
+        {},
+        { poster_path: "https://evil.example/x.jpg" },
         { poster_path: "/ghi789.jpg" },
       ],
     });
-
-    const paths = await getTrendingPosters();
-
-    expect(paths).toEqual(["/abc123.jpg", "/def456.jpg", "/ghi789.jpg"]);
+    await expect(fetchPosterList("movie/popular")).resolves.toEqual(["/abc123.jpg", "/def456.jpg", "/ghi789.jpg"]);
+    const [url, init] = vi.mocked(globalThis.fetch).mock.calls[0];
+    expect(String(url)).toBe("https://api.themoviedb.org/3/movie/popular?language=en-US&page=1");
+    expect(init).toMatchObject({ headers: { Authorization: "Bearer test-bearer-token" }, cache: "no-store" });
   });
 
-  it("returns empty array when response shape is unexpected", async () => {
-    stubFetch({ page: 1, total_results: 0 }); // missing 'results' key
-
-    const paths = await getTrendingPosters();
-
-    expect(paths).toEqual([]);
+  it.each([
+    ["an unexpected body", () => stubFetch({ page: 1, total_results: 0 })],
+    ["fetch throwing", () => vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network error")))],
+    ["a non-OK status", () => stubFetch({}, false)],
+  ])("returns null (failed, not empty) on %s", async (_label, arrange) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    arrange();
+    await expect(fetchPosterList("trending/movie/day")).resolves.toBeNull();
   });
 
-  it("returns empty array when fetch throws", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network error")));
-
-    const paths = await getTrendingPosters();
-
-    expect(paths).toEqual([]);
-  });
-
-  it("returns empty array when TMDB_API_KEY is not set", async () => {
+  it("returns null with no fetch when TMDB_API_KEY is not set", async () => {
     delete process.env.TMDB_API_KEY;
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    await expect(fetchPosterList("movie/popular")).resolves.toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
 
-    const paths = await getTrendingPosters();
-
-    expect(paths).toEqual([]);
-    expect(vi.isMockFunction(globalThis.fetch)).toBe(false); // fetch never called
+describe("mergePosterLists", () => {
+  it("de-duplicates across lists, interleaves them, and caps the pool", () => {
+    const pool = mergePosterLists([
+      ["/a.jpg", "/b.jpg", "/c.jpg"],
+      ["/b.jpg", "/d.jpg"],
+      ["/a.jpg", "/e.jpg", "/f.jpg"],
+    ]);
+    expect(pool).toEqual(["/a.jpg", "/b.jpg", "/d.jpg", "/e.jpg", "/c.jpg", "/f.jpg"]);
+    expect(new Set(pool).size).toBe(pool.length);
+    expect(mergePosterLists([["/a.jpg", "/b.jpg"], ["/c.jpg"]], 2)).toEqual(["/a.jpg", "/c.jpg"]);
   });
 
-  it("returns empty array on non-OK HTTP status", async () => {
-    stubFetch({}, false); // ok: false, status: 500
+  it("four realistic lists of 20 with overlap give a 60-80 poster pool with no duplicates", () => {
+    const list = (from: number) => Array.from({ length: 20 }, (_, i) => `/p${from + i}.jpg`);
+    const pool = mergePosterLists([list(0), list(10), list(25), list(45)]); // overlaps 0-19/10-29
+    expect(pool.length).toBeGreaterThanOrEqual(60);
+    expect(pool.length).toBeLessThanOrEqual(POSTER_POOL_MAX);
+    expect(new Set(pool).size).toBe(pool.length);
+  });
+});
 
-    const paths = await getTrendingPosters();
+describe("createPosterPoolLoader", () => {
+  const LISTS = ["trending/movie/day", "movie/popular", "movie/top_rated", "movie/now_playing"] as const;
+  const listOf = (prefix: string) => Array.from({ length: 20 }, (_, i) => `/${prefix}${i}.jpg`);
+  const OK = { "trending/movie/day": listOf("t"), "movie/popular": listOf("p"), "movie/top_rated": listOf("r"), "movie/now_playing": listOf("n") };
 
-    expect(paths).toEqual([]);
+  function setup(impl?: (list: PosterList) => Promise<string[] | null>) {
+    let t = 1_000_000;
+    const fetchList = vi.fn(impl ?? (async (list: PosterList) => OK[list]));
+    const load = createPosterPoolLoader({ fetchList, now: () => t });
+    return { load, fetchList, advance: (ms: number) => (t += ms) };
+  }
+
+  it("builds the pool from all four lists, with no duplicates and at most 80 posters", async () => {
+    const { load, fetchList } = setup();
+    const pool = await load();
+    expect(fetchList.mock.calls.map((c) => c[0])).toEqual([...LISTS]);
+    expect(pool).toHaveLength(80);
+    expect(new Set(pool).size).toBe(80);
+  });
+
+  it("the second call within the hour does not hit TMDB; after an hour it refreshes", async () => {
+    const { load, fetchList, advance } = setup();
+    const first = await load();
+    advance(POSTER_POOL_TTL_MS - 1);
+    expect(await load()).toBe(first);
+    expect(fetchList).toHaveBeenCalledTimes(4); // one call per list, once
+
+    advance(1);
+    await load();
+    expect(fetchList).toHaveBeenCalledTimes(8);
+  });
+
+  it("concurrent calls share one refresh (one request per list)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { load, fetchList } = setup(async (list) => {
+      await gate;
+      return OK[list];
+    });
+    const calls = Array.from({ length: 10 }, () => load());
+    release();
+    const pools = await Promise.all(calls);
+    expect(fetchList).toHaveBeenCalledTimes(4);
+    for (const p of pools) expect(p).toBe(pools[0]);
+  });
+
+  it("stale on error: when every list fails after expiry, the last good pool is served", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let failing = false;
+    const { load, fetchList, advance } = setup(async (list) => (failing ? null : OK[list]));
+    const good = await load();
+
+    failing = true;
+    advance(POSTER_POOL_TTL_MS);
+    expect(await load()).toBe(good);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("last good pool"));
+
+    // The failure isn't cached as success: once the retry pause is over, TMDB is tried again.
+    const callsAfterFailure = fetchList.mock.calls.length;
+    advance(POSTER_POOL_RETRY_MS - 1);
+    expect(await load()).toBe(good);
+    expect(fetchList).toHaveBeenCalledTimes(callsAfterFailure); // pausing, no hammering
+    failing = false;
+    advance(1);
+    const fresh = await load();
+    expect(fetchList).toHaveBeenCalledTimes(callsAfterFailure + 4);
+    expect(fresh).toEqual(good);
+    expect(fresh).not.toBe(good); // a new pool object: the refresh really happened
+  });
+
+  it("thrown errors and timeouts count as failures too", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { load } = setup(async () => {
+      throw new Error("The operation was aborted due to timeout");
+    });
+    await expect(load()).resolves.toEqual([]);
+  });
+
+  it("existing fallback: no good pool yet and TMDB down → [] (the pages show no wall), and it retries later", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let failing = true;
+    const { load, fetchList, advance } = setup(async (list) => (failing ? null : OK[list]));
+    await expect(load()).resolves.toEqual([]);
+    failing = false;
+    advance(POSTER_POOL_RETRY_MS);
+    await expect(load()).resolves.toHaveLength(80);
+    expect(fetchList).toHaveBeenCalledTimes(8);
+  });
+
+  it("a partial refresh is used, but only for 5 minutes, and never shrinks a bigger pool", async () => {
+    let down: PosterList[] = ["movie/top_rated", "movie/now_playing"];
+    const { load, fetchList, advance } = setup(async (list) => (down.includes(list) ? null : OK[list]));
+    expect(await load()).toHaveLength(40); // two lists of 20
+
+    advance(POSTER_POOL_PARTIAL_TTL_MS - 1);
+    await load();
+    expect(fetchList).toHaveBeenCalledTimes(4);
+    down = [];
+    advance(1);
+    const full = await load();
+    expect(full).toHaveLength(80);
+
+    down = ["movie/popular"];
+    advance(POSTER_POOL_TTL_MS);
+    expect(await load()).toBe(full); // the partial (60) pool doesn't replace the full one
+    advance(POSTER_POOL_PARTIAL_TTL_MS);
+    await load();
+    expect(fetchList).toHaveBeenCalledTimes(16); // retried after 5 minutes, not an hour
+  });
+
+  it("all lists empty (nothing usable) is treated as a failure, not cached", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { load, fetchList, advance } = setup(async () => []);
+    await expect(load()).resolves.toEqual([]);
+    advance(POSTER_POOL_RETRY_MS);
+    await load();
+    expect(fetchList).toHaveBeenCalledTimes(8);
+  });
+});
+
+describe("getPosterPool", () => {
+  it("returns [] with no fetch when TMDB_API_KEY is not set", async () => {
+    delete process.env.TMDB_API_KEY;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    await expect(getPosterPool()).resolves.toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -13,7 +13,7 @@ Movie Memory is a small full-stack app. You sign in with Google, pick your favor
 - Inline edit of the favorite movie on the dashboard, with optimistic update and revert on error.
 - Fact history: cursor-paginated, 5 per page, with Load more and Show less.
 - A typed API client and Zod validation on every input and response.
-- 567 tests across 27 suites, including real-Postgres concurrency tests, and a GitHub Actions workflow.
+- 587 tests across 28 suites, including real-Postgres concurrency tests, and a GitHub Actions workflow.
 
 ## Setup
 
@@ -225,13 +225,14 @@ I built **both Variant A (backend robustness) and Variant B (frontend/API)**.
 - **Model output isn't independently verified.** Grounded facts are only as good as their sources, and knowledge mode (used only when no Wikipedia notes exist) can state false trivia despite strict accuracy rules.
 - **Wikipedia can be missing, short or wrong.** Some films (especially upcoming or small ones) have no article, a stub without production sections, or an article that hasn't caught up with production news. The app then falls back as described above. If the article is wrong, a fact drawn from it can be wrong too.
 - **Rate limits and the TMDB and Wikipedia caches are in memory**, so they're per server process and reset on restart. The 60-second window and the lock are in Postgres and work across instances.
+- **The poster cache is per server instance.** The landing wall's TMDB pool (1 hour) lives in each server process's memory, so each instance fetches its own pool and a restart starts empty.
 - **Facts are keyed by title**, not by TMDB id, so two films with the same title share a cache window and history.
 - **The knowledge cutoff must follow the model.** If `OPENAI_MODEL` changes, update `MODEL_KNOWLEDGE_CUTOFF` to a date comfortably before the new model's training cutoff.
 - **The CI workflow hasn't run on GitHub yet.** It runs the same commands that pass locally, but it hasn't been pushed and exercised.
 
 ## Testing
 
-**567 tests across 27 suites** (Vitest + React Testing Library). [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md) maps each one to the behavior it covers.
+**587 tests across 28 suites** (Vitest + React Testing Library). [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md) maps each one to the behavior it covers.
 
 - **Fact service:** cache hit and miss, the 60-second boundary, stale fallback on OpenAI failure and lock timeout, refusal handling and retries, the mode matrix (Wikipedia notes or not, before or after the cutoff, free text), the avoid list and angle rotation, logging without personal data.
 - **External services:** TMDB and Wikipedia parsing, matching, timeouts, caching and degraded behavior; the OpenAI client's deadline and output trimming.

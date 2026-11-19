@@ -7,7 +7,7 @@ import PosterBackground from "@/components/PosterBackground";
 import FactCarousel from "@/components/FactCarousel";
 import ScrollFade from "@/components/ScrollFade";
 import Logo from "@/components/Logo";
-import { getTrendingPosters } from "@/lib/tmdb";
+import { getPosterWall } from "@/lib/poster-wall";
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
 
@@ -191,7 +191,7 @@ export default async function Home() {
     redirect(movie ? "/dashboard" : "/onboarding");
   }
 
-  const posters = await getTrendingPosters();
+  const posters = await getPosterWall();
 
   return (
     <>

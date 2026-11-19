@@ -219,7 +219,15 @@
 - **Why:** One sentence under 240 characters was often too thin to be interesting, especially with TMDB context to draw on. 200 tokens comfortably fits 70 words without letting the model ramble.
 - **Considered:** Keeping one sentence (thin). Letting the UI truncate instead (the stored fact should already be the final text).
 
+### Poster wall: a cached multi-list pool, shuffled per visit
+
+- **Decision:** The landing and onboarding wall draws from a pool built from four TMDB lists (trending today, popular, top rated, now playing): about 60-80 unique posters, posters without an image skipped. The pool lives in memory in `lib/tmdb.ts` for 1 hour, shared by every visitor of the server process; concurrent requests share one refresh. If every list fails, the last good pool is served (stale on error), or `[]` (the existing no-wall fallback) if there is none; a failure is never cached as success, and TMDB isn't retried for a minute. A partial refresh is cached for only 5 minutes and never replaces a bigger pool. Each render shuffles the pool with a seeded shuffle (random seed per render) and shows 40, the same count the wall tiled before.
+- **Why:** The wall always looked the same: it was one list (`/trending/movie/day`, 20 posters) in TMDB's order, cached up to 24 hours through Next's fetch cache, and the tile repeats those 20. The pages call `auth()`, so they must render per request; caching the TMDB data instead of the page keeps that. An explicit in-memory loader (the same pattern as movie details) makes the 1-hour TTL, request sharing and stale-on-error behaviour visible and testable, which Next's fetch cache doesn't. `PosterBackground` is a server component, so the shuffled order exists only in the server-rendered markup and there's nothing for the client to re-render or mismatch; the seed just makes each render reproducible for tests.
+- **Considered:** `next: { revalidate: 3600 }` on each list fetch (opaque, no stale-on-error control, behaves differently in dev). Shuffling on the client (a hydration mismatch, or a flash of the unshuffled order). Showing the whole pool (630 poster elements instead of 360, for no visible gain).
+
 ### Landing page TMDB trending poster wall
+
+*(Superseded by "Poster wall: a cached multi-list pool, shuffled per visit". Kept for history.)*
 
 - **Decision:** Fetch TMDB trending movie posters (`/trending/movie/day`) with a 24 h Next.js `revalidate: 86400`, display them as an animated 3-row marquee background on the landing page, and credit TMDB in the footer (omitted if `posters.length === 0`).
 - **Why:** Trending posters change slowly (daily at most), so a 24 h cache keeps the wall fresh without burning API quota on every cold load. The trending endpoint returns a curated set of high-quality posters with no title lookup — a single call populates the entire background. Failures return `[]` so the page renders normally without posters; the footer credit is conditional on poster data being present.
