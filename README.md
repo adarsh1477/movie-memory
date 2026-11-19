@@ -225,7 +225,7 @@ I built **both Variant A (backend robustness) and Variant B (frontend/API)**.
 
 ## Key tradeoffs
 
-- **Database-backed cache vs Redis.** The newest `Fact` row is the cache, so there's no extra infrastructure, nothing to invalidate, and the cache and history can't disagree. The cost is a small indexed query on every request, which Redis would avoid at scale.
+- **Database-backed cache vs Redis.** The newest `Fact` row is the cache, so there's no extra infrastructure, nothing to invalidate, and the cache and history can't disagree. The cost is a small indexed query on every request, which Redis would avoid at scale. At around 1 million active users, each dashboard asks for a new fact about once a minute, roughly 17,000 requests per second, so Redis and the shared pool become necessary.
 - **Postgres advisory lock vs an in-memory lock.** An in-memory mutex only protects one server process. The advisory lock works across instances, releases itself when the transaction ends, and uses the database the app already has. The cost is a held connection while generating, bounded by the timeout invariant.
 - **Per-user generation vs a shared pool.** Each user gets their own facts, with their own avoid list and angle rotation. A shared per-movie pool would cut OpenAI cost for popular films but needs per-user "seen" tracking. I chose the simpler, more personal option.
 - **30-second client cache vs the 60-second server window.** The client cache saves requests on navigation and reloads, but it's capped at the server window so the client never shows a fact the server would already have replaced.
@@ -239,7 +239,8 @@ I built **both Variant A (backend robustness) and Variant B (frontend/API)**.
 
 - **Put Redis in front** of the database cache (a 60-second TTL key per user and movie) so reads at scale don't hit Postgres.
 - **Move the rate limiter and the TMDB and Wikipedia caches to Redis**, so they're shared across server instances instead of per process.
-- **Add a shared per-movie fact pool** with per-user "seen" tracking, to cut OpenAI cost for popular films.
+- **Add a shared per-movie fact pool** (in Redis, or a Postgres table with Redis in front) with per-user "seen" tracking. Serve an unseen fact from the pool first and call OpenAI only when the pool has nothing new for that user. This is what cuts OpenAI cost at scale, because most users pick popular films.
+- **Add a global limit on OpenAI calls** (a shared rate limiter or queue with a daily budget) as a safety net, so total cost and OpenAI rate limits stay bounded. When the limit is hit, serve a pool fact or the latest stored fact instead of an error. Today the limit is per user only (one new fact per 60 seconds, 30 requests a minute).
 - **Check for duplicates in code** against recent facts, instead of relying only on the avoid list in the prompt.
 - **Store `tmdbId` on `Fact`**, so two films with the same title (for example *Heat*, 1995 and 1986) don't share a cache window and history.
 - **Add a verification step for knowledge-mode facts**, such as checking key claims against a source before storing them.
