@@ -55,6 +55,12 @@ describe("lib/env", () => {
       await expect(loadEnv({ OPENAI_MODEL: value })).rejects.toThrow(/OPENAI_MODEL/);
     });
 
+    it("AUTH_TRUST_HOST is optional: unset and \"true\" both parse without error", async () => {
+      await expect(loadEnv({ AUTH_TRUST_HOST: undefined })).resolves.toBeTruthy();
+      const set = await loadEnv({ AUTH_TRUST_HOST: "true" });
+      expect(set.env.AUTH_TRUST_HOST).toBe("true");
+    });
+
     it("TMDB_API_KEY is optional: unset and empty both parse without error", async () => {
       await expect(loadEnv({ TMDB_API_KEY: undefined })).resolves.toBeTruthy();
       const empty = await loadEnv({ TMDB_API_KEY: "" });

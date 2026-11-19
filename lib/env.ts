@@ -20,6 +20,9 @@ const isoDate = (name: string) =>
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   AUTH_SECRET: z.string().min(1, "AUTH_SECRET is required"),
+  // Optional. Auth.js reads it from process.env itself; listed here so it's documented and
+  // typed. Needed for `pnpm start` locally or behind a proxy; not in dev; automatic on Vercel.
+  AUTH_TRUST_HOST: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string().min(1, "GOOGLE_CLIENT_ID is required"),
   GOOGLE_CLIENT_SECRET: z.string().min(1, "GOOGLE_CLIENT_SECRET is required"),
   OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required"),

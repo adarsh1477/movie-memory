@@ -13,7 +13,7 @@ Movie Memory is a small full-stack app. You sign in with Google, pick your favor
 - Inline edit of the favorite movie on the dashboard, with optimistic update and revert on error.
 - Fact history: cursor-paginated, 5 per page, with Load more and Show less.
 - A typed API client and Zod validation on every input and response.
-- 587 tests across 28 suites, including real-Postgres concurrency tests, and a GitHub Actions workflow.
+- 588 tests across 28 suites, including real-Postgres concurrency tests, and a GitHub Actions workflow.
 
 ## Setup
 
@@ -52,6 +52,16 @@ pnpm lint           # ESLint 9 flat config
 
 Set `SKIP_PG_TESTS=1` to skip the four real-Postgres suites when no database is available.
 
+### Production build
+
+```bash
+# make sure .env.local contains AUTH_TRUST_HOST=true (see the table below)
+pnpm build
+pnpm start          # http://localhost:3000
+```
+
+Without `AUTH_TRUST_HOST=true`, Auth.js rejects requests under `pnpm start` with `UntrustedHost` and Google sign-in fails. `pnpm dev` doesn't need it.
+
 ## Environment variables
 
 Put the same values in both `.env` (used by the Prisma CLI) and `.env.local` (used by Next.js). Both files are git-ignored. `.env.example` contains placeholders only.
@@ -65,6 +75,7 @@ Put the same values in both `.env` (used by the Prisma CLI) and `.env.local` (us
 | `OPENAI_API_KEY` | Required | OpenAI API key. Used only on the server. | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 | `OPENAI_MODEL` | Optional | Chat model for facts. Default `gpt-4.1-mini`. Must be a non-reasoning chat model (the request sends `max_tokens` and `temperature`). | For example `gpt-4.1-mini`, `gpt-4.1`, `gpt-4o-mini`. |
 | `MODEL_KNOWLEDGE_CUTOFF` | Optional | `YYYY-MM-DD`, default `2024-01-01`. Only matters when a film has no Wikipedia notes: films released before it fall back to model knowledge, later ones are grounded on TMDB data only. | Set it a few months before `OPENAI_MODEL`'s training cutoff, and update it when you change the model. |
+| `AUTH_TRUST_HOST` | Optional | Tells Auth.js to trust the request's host. Needed for a production build run locally with `pnpm start`, or behind a proxy. Not needed in `pnpm dev`; set automatically on Vercel. | Set to `true` (as in `.env.example`). |
 | `TMDB_API_KEY` | Optional (empty in `.env.example`) | TMDB **Read Access Token** (the Bearer token, not the v3 API key). Empty is treated the same as unset. | [developer.themoviedb.org](https://developer.themoviedb.org/) → Settings → API. |
 
 **Without `TMDB_API_KEY`** (left empty as in `.env.example`, or removed) the app still works with no errors, in a degraded mode: search reports itself unavailable and accepts the title as free text, there are no posters (a gradient fallback is shown), and facts for free-text titles use model knowledge only, since there are no TMDB details to look up Wikipedia with.
@@ -232,7 +243,7 @@ I built **both Variant A (backend robustness) and Variant B (frontend/API)**.
 
 ## Testing
 
-**587 tests across 28 suites** (Vitest + React Testing Library). [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md) maps each one to the behavior it covers.
+**588 tests across 28 suites** (Vitest + React Testing Library). [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md) maps each one to the behavior it covers.
 
 - **Fact service:** cache hit and miss, the 60-second boundary, stale fallback on OpenAI failure and lock timeout, refusal handling and retries, the mode matrix (Wikipedia notes or not, before or after the cutoff, free text), the avoid list and angle rotation, logging without personal data.
 - **External services:** TMDB and Wikipedia parsing, matching, timeouts, caching and degraded behavior; the OpenAI client's deadline and output trimming.

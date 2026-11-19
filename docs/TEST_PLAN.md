@@ -1,6 +1,6 @@
 # Test Plan
 
-Vitest + React Testing Library. 28 suites (587 tests). Four suites run against the real Docker Postgres; everything else mocks Prisma, `auth()`, OpenAI, TMDB, Wikipedia or `fetch`.
+Vitest + React Testing Library. 28 suites (588 tests). Four suites run against the real Docker Postgres; everything else mocks Prisma, `auth()`, OpenAI, TMDB, Wikipedia or `fetch`.
 
 Run: `pnpm test` (about 21s, mostly the 7s and 11s lock tests). Skip the Postgres suites with `SKIP_PG_TESTS=1`; point them elsewhere with `PG_TEST_URL`. They only touch users they create and delete them afterwards.
 
