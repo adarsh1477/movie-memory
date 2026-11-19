@@ -17,6 +17,26 @@ type Props = {
 // 3-copy track → animate by exactly -33.333% = one tile width, seamless at all sizes.
 const MIN_TILE_ITEMS = 40;
 
+/** Posters per row visible on first paint at common widths (~1366–1600px). */
+export const EAGER_PER_ROW = 10;
+
+/**
+ * Loading strategy for one poster slot. Only the slots on screen at first paint load
+ * eagerly; the very first one (top-left, the likeliest LCP image) is also preloaded.
+ * Everything off screen stays lazy. A reverse row starts at translateX(-33.333%), so its
+ * visible slots at first paint are the SECOND copy of the tile (indices n…n+9), not the first.
+ */
+export function posterLoading(
+  rowIndex: number,
+  itemIndex: number,
+  reverse: boolean,
+  tileLength: number,
+): { loading: "eager" | "lazy"; preload: boolean } {
+  const firstVisible = reverse ? tileLength : 0;
+  const visible = itemIndex >= firstVisible && itemIndex < firstVisible + EAGER_PER_ROW;
+  return { loading: visible ? "eager" : "lazy", preload: rowIndex === 0 && itemIndex === 0 };
+}
+
 export default function PosterBackground({ posters, variant = "landing" }: Props) {
   const focus = variant === "focus";
   if (posters.length < 4) return null;
@@ -74,23 +94,27 @@ export default function PosterBackground({ posters, variant = "landing" }: Props
               }
               style={{ animationDuration: `${row.duration}s` }}
             >
-              {row.items.map((path, j) => (
-                <div
-                  key={j}
-                  // mr-3 = 12px gap; width derived from height via aspect-ratio 2/3
-                  className="relative mr-3 shrink-0 aspect-[2/3]"
-                  style={{ height: posterH }}
-                >
-                  <Image
-                    src={posterUrl(path, "w342")}
-                    alt=""
-                    fill
-                    className="object-cover"
-                    sizes="(max-width: 1920px) 140px, 140px"
-                    loading="lazy"
-                  />
-                </div>
-              ))}
+              {row.items.map((path, j) => {
+                const { loading, preload } = posterLoading(i, j, row.reverse, n);
+                return (
+                  <div
+                    key={j}
+                    // mr-3 = 12px gap; width derived from height via aspect-ratio 2/3
+                    className="relative mr-3 shrink-0 aspect-[2/3]"
+                    style={{ height: posterH }}
+                  >
+                    <Image
+                      src={posterUrl(path, "w342")}
+                      alt=""
+                      fill
+                      className="object-cover"
+                      sizes="(max-width: 1920px) 140px, 140px"
+                      // A preloaded image already loads eagerly, so it gets `preload` alone.
+                      {...(preload ? { preload: true } : { loading })}
+                    />
+                  </div>
+                );
+              })}
             </div>
           </div>
         ))}

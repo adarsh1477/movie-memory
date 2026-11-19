@@ -218,7 +218,9 @@ export default function MovieHeroCard({ userId, movie }: { userId: string; movie
                 src={posterUrl(shown.posterPath, "w500")}
                 fill
                 alt=""
-                priority
+                // Above the fold but decorative (blurred): eager, without preload, so it
+                // doesn't compete with the poster below, which is the LCP image.
+                loading="eager"
                 className="scale-125 object-cover motion-safe:animate-fade-in"
                 style={{ filter: "blur(72px)", opacity: 0.5 }}
                 sizes="100vw"
@@ -268,7 +270,8 @@ export default function MovieHeroCard({ userId, movie }: { userId: string; movie
                   src={posterUrl(shown.posterPath, "w500")}
                   alt={displayTitle}
                   fill
-                  priority
+                  // The dashboard's LCP image: preload (Next 16's replacement for `priority`).
+                  preload
                   className="object-cover motion-safe:animate-fade-in"
                   sizes="(max-width: 640px) 160px, (max-width: 1024px) 220px, 280px"
                 />

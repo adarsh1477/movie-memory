@@ -5,10 +5,12 @@ import MovieHeroCard, { type HeroMovie } from "@/components/MovieHeroCard";
 import { factCache } from "@/lib/client-cache";
 
 vi.mock("next/image", () => ({
-  default: (props: ImgHTMLAttributes<HTMLImageElement> & { fill?: boolean; priority?: boolean }) => {
+  default: (props: ImgHTMLAttributes<HTMLImageElement> & { fill?: boolean; priority?: boolean; preload?: boolean }) => {
+    // Strip next/image-only props that a plain <img> doesn't understand.
     const rest = { ...props };
     delete rest.fill;
     delete rest.priority;
+    delete rest.preload;
     // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
     return <img {...rest} />;
   },
