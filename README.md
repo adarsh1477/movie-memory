@@ -113,13 +113,19 @@ flowchart TD
   C -->|GET /api/fact| R[Route handler: session userId, rate limit]
   R --> Q{"Newest Fact row for<br/>user + movie under 60s old?"}
   Q -->|yes: cache hit| H[Return it. No OpenAI call]
-  Q -->|no| T[TMDB details ≤3s, then Wikipedia notes ≤2s<br/>both cached 24h, both before the lock]
+  Q -->|no| FT{"Picked from TMDB?"}
+  FT -->|"no: free-text title"| K[Knowledge mode<br/>no TMDB or Wikipedia lookup]
+  FT -->|yes| T[TMDB details ≤3s, then Wikipedia notes ≤2s<br/>both cached 24h, both before the lock]
   T --> M[chooseFactMode: grounded or knowledge]
+  K --> L
   M --> L["Transaction (20s): lock_timeout 10s,<br/>pg_advisory_xact_lock per user"]
   L --> Q2{"Re-check: fresh row now?"}
   Q2 -->|yes| H
-  Q2 -->|no| O[OpenAI, 8s deadline] -->|ok| I[INSERT Fact, commit] --> OK[Return stale: false]
-  O -->|fails| S{Any prior fact?}
+  Q2 -->|no| O["OpenAI, one 8s deadline<br/>for every attempt"] -->|ok| I[INSERT Fact, commit] --> OK[Return stale: false]
+  O -->|"reply rejected<br/>(refusal, empty, too short)"| RT["Retry once, same 8s deadline:<br/>knowledge → grounded if TMDB details exist,<br/>otherwise a stricter prompt"]
+  RT -->|ok| I
+  RT -->|rejected again| S
+  O -->|"error or timeout"| S{Any prior fact?}
   L -->|"lock wait timeout (55P03)"| S
   S -->|yes| ST[Return latest with stale: true]
   S -->|no| E[502 with a friendly error]
