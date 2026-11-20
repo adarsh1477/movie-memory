@@ -16,6 +16,8 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
     Google({
       clientId: env.GOOGLE_CLIENT_ID,
       clientSecret: env.GOOGLE_CLIENT_SECRET,
+      // Show Google's account picker every time, so after sign-out you can pick a different account.
+      authorization: { params: { prompt: "select_account" } },
     }),
   ],
   session: { strategy: "database" },
