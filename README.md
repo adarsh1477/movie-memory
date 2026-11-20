@@ -15,6 +15,24 @@ Movie Memory is a small full-stack app. You sign in with Google, pick your favor
 - A typed API client and Zod validation on every input and response.
 - 588 tests across 28 suites, including real-Postgres concurrency tests, and a GitHub Actions workflow.
 
+**Screenshots**
+
+![Landing page](docs/screenshots/landing_page.png)
+
+Landing page with the poster wall and Google sign-in
+
+![Landing page, scrolled](docs/screenshots/landing_page2.png)
+
+Landing page, scrolled
+
+![Onboarding](docs/screenshots/onboarding.png)
+
+Onboarding: pick a favorite movie with TMDB search
+
+![User dashboard](docs/screenshots/user_dashboard.png)
+
+Dashboard with the fun fact and countdown
+
 ## Setup
 
 ### Prerequisites
