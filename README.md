@@ -173,6 +173,8 @@ Deleting a user cascades to their movie and facts.
 
 The cache is **database-backed**: the newest `Fact` row for the user and movie *is* the cache, found with the `(userId, movieTitle, createdAt desc)` index. If that row is less than 60 seconds old, it's returned and **no OpenAI call is made**. There is no separate cache store; every generated fact is kept, which is also what powers the history.
 
+Try it: get a fact on the dashboard, then open `/dashboard` in a second tab within 60 seconds. The new tab shows the same fact, with the countdown continuing from the remaining time, and the server logs `fact.cache_hit` with no OpenAI call. This works because the cache belongs to the user and movie, not to a tab or a browser session.
+
 ### Burst protection and the timeout invariant
 
 Several tabs or a burst of clicks can arrive after the window expires at the same moment. Without coordination, each would call OpenAI. Instead, generation runs inside a Postgres transaction that takes `pg_advisory_xact_lock(hashtext('fact:' || userId))`:
