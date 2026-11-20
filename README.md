@@ -66,6 +66,8 @@ pnpm dev                    # development server: http://localhost:3000
 
 That's the development setup. To run a production build instead, see [Production build](#production-build) below.
 
+Dev mode is noticeably slower than production (Next.js compiles pages on demand and runs React's development build). For the fast version, use the production build below.
+
 ### Running checks
 
 ```bash
